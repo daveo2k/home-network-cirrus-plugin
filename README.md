@@ -67,6 +67,7 @@ font_scale: 1             # map text size multiplier (0.7-1.8); viewers can also
 layout_editing: admin     # who can drag devices and save the layout: admin (default), true or false
 snap_to_grid: true        # snap dragged devices to a grid (viewers can toggle it in edit mode)
 grid_size: 20             # grid spacing in px
+device_scale: 2           # size of gateways, switches, APs and wired devices (1-3); wireless clients stay normal size
 show_vlans: true          # VLAN legend above the map
 ```
 
@@ -125,6 +126,13 @@ Any wired device the map already shows (from the MAC table or LLDP) has **Add to
 **Unknown ports:** open ports that nothing recognises are flagged *unknown*. Click **Name this port** to say what runs there, either for that device only or for that port on every device. Your names replace "Unknown service" in all future scans, and **rename** / **Clear name** change or remove them.
 
 Devices can also be added under **Configure** → **Servers & manual devices**. Scans repeat every 24 h by default (**Configure** → **General**). Only private / link-local addresses can be scanned, and some intrusion-detection systems will notice a scan.
+
+### Installing nmap
+
+Full scans use nmap when Home Assistant can find it. The integration does not install system packages itself, because Home Assistant's container is replaced on every update. If a full scan is requested and nmap is missing, a notice appears under **Settings → Repairs**, and the scan uses the built-in scanner instead.
+
+- **Home Assistant OS / Supervised / Container:** nmap normally ships in the Home Assistant image. If it is missing, update Home Assistant. For a custom container image, add `nmap` (e.g. `apk add nmap`).
+- **Home Assistant Core (Python venv):** `sudo apt install nmap` (or your distro's equivalent), then restart Home Assistant.
 
 ## Speed test & WAN
 

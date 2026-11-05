@@ -49,7 +49,9 @@ from .const import (
     EVENT_NEW_CLIENT,
     TOPOLOGY_INTERVAL,
 )
-from .discovery import discover, full_scan
+from homeassistant.helpers import issue_registry as ir
+
+from .discovery import discover, full_scan, nmap_available
 from .dns import ReverseResolver, parse_servers
 from .identify import HaDevice, identify, is_private_mac
 from .mac_table import SshError, SwitchTables, fetch_switch_tables, norm_mac
@@ -566,6 +568,8 @@ class CirrusCoordinator(DataUpdateCoordinator[CirrusData]):
 
     # ---------------------------------------------------------------- discovery
     def _schedule_discovery(self, data: CirrusData) -> None:
+        if "nmap" not in self.hass.data.get(DOMAIN, {}):
+            self.check_nmap(wanted=any(d.get("scan") == "full" for d in self.manual_devices))
         hours = float(self.config_entry.options.get(CONF_DISCOVERY_INTERVAL, DEFAULT_DISCOVERY_INTERVAL))
         for dev in self.manual_devices:
             ip = dev.get("ip")
@@ -576,10 +580,31 @@ class CirrusCoordinator(DataUpdateCoordinator[CirrusData]):
                 mode = "full" if dev.get("scan") == "full" else "quick"
                 self.hass.async_create_background_task(self.async_discover(ip, mode), f"ovcirrus discover {ip}")
 
+    def check_nmap(self, wanted: bool) -> bool:
+        """Raise / clear the Repairs notice about nmap. Returns True when nmap is installed."""
+        present = nmap_available()
+        self.hass.data.setdefault(DOMAIN, {})["nmap"] = present
+        if present or not wanted:
+            ir.async_delete_issue(self.hass, DOMAIN, "nmap_missing")
+        else:
+            ir.async_create_issue(
+                self.hass,
+                DOMAIN,
+                "nmap_missing",
+                is_fixable=False,
+                is_persistent=False,
+                severity=ir.IssueSeverity.WARNING,
+                translation_key="nmap_missing",
+                learn_more_url="https://github.com/daveo2k/home-network-cirrus-plugin#installing-nmap",
+            )
+        return present
+
     async def async_discover(self, ip: str, mode: str = "quick") -> dict:
         if ip in self._scanning:
             return self.services_view().get(ip) or {}
         self._scanning.add(ip)
+        if mode == "full":
+            self.check_nmap(wanted=True)
         try:
             result = await (full_scan(ip) if mode == "full" else discover(ip))
             self.store.set_services(ip, result)

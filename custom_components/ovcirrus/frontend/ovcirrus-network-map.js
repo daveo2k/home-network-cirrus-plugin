@@ -6,7 +6,8 @@
  *          font_scale (map text size multiplier, default 1; viewers can change it with A− / A+),
  *          layout_editing ("admin" default, true, or false: who may drag devices and save the layout),
  *          snap_to_grid (default true), grid_size (px, default 20),
- *          height: "fill" makes the map fill its container (used by the sidebar panel)
+ *          height: "fill" makes the map fill its container (used by the sidebar panel),
+ *          device_scale (size of gateways/switches/APs/wired devices, default 2; wireless clients stay 1)
  */
 const CHIP_W = 210; // minimum device box width
 const MAX_CHIP_W = 380; // boxes grow to fit their text up to this (times the text size), then ellipsis
@@ -29,6 +30,12 @@ function applyFontScale(fs) {
   LABEL_ROW = Math.round(BASE.LABEL_ROW * Math.max(0.85, fs));
 }
 const BUNDLE_STEP = 16; // spacing between parallel link lines
+
+// Devices drawn at device_scale (default 2x); wireless clients and the Internet node stay normal size.
+const BIG_KINDS = new Set(["gateway", "switch", "ap", "bridge", "endpoint", "manual"]);
+let DEVICE_SCALE = 2;
+const ringSize = (n) => (BIG_KINDS.has(n.kind) ? Math.round(42 * DEVICE_SCALE) : 42);
+const chipH = (n) => (BIG_KINDS.has(n.kind) ? Math.max(CHIP_H, ringSize(n) + 14) : CHIP_H);
 
 // Devices that can be dragged: infrastructure, wired and manual devices. Wireless clients follow their AP.
 const SNAP_KEY = "ovcirrus-snap-to-grid";
@@ -223,7 +230,7 @@ class OvCirrusNetworkMap extends HTMLElement {
   setConfig(config) {
     this._config = {
       refresh: 30, max_columns: 3, height: 640, expand_clients: false, font_scale: 1,
-      layout_editing: "admin", snap_to_grid: true, grid_size: 20, ...config,
+      layout_editing: "admin", snap_to_grid: true, grid_size: 20, device_scale: 2, ...config,
     };
     let snap = null;
     try {
@@ -295,6 +302,7 @@ class OvCirrusNetworkMap extends HTMLElement {
       const res = await this._hass.callWS(msg);
       this._sites = (res.entries || []).flatMap((e) => e.sites.map((s) => ({ ...s, entry: e.title, entry_id: s.entry_id || e.entry_id })));
       this._isAdmin = !!res.is_admin;
+      this._nmap = !!res.nmap;
       const cur = this._sites[this._siteIdx];
       if (cur && this._localOffsets) {
         // Drop local edits the server has confirmed.
@@ -361,11 +369,16 @@ class OvCirrusNetworkMap extends HTMLElement {
   }
 
   _chipWidth(n) {
-    const ring = n.graphic?.type === "switch" ? 46 : 42;
+    const ring = n.graphic?.type === "switch" ? Math.round(ringSize(n) * 1.1) : ringSize(n);
     const toggle = n.groups.some((g) => g.children.length) ? 30 : 0;
     const text = Math.max(this._textWidth(n.name, "600 13px"), this._textWidth(n.subtitle, "11px"));
     // padding 6+6, gap ring->text 10, a little slack for sub-pixel rounding
-    return Math.round(Math.min(MAX_CHIP_W * Math.max(1, FS), Math.max(CHIP_W, 12 + ring + 10 + text + toggle + 8)));
+    // ring outer width = content + border (2px, or 3px for big devices); gap ring->text 10 (14 when big)
+    const big = BIG_KINDS.has(n.kind);
+    const outer = ring + (big ? 6 : 4);
+    const gap = big ? 14 : 10;
+    const max = MAX_CHIP_W * Math.max(1, FS) + (big ? outer - 46 : 0);
+    return Math.round(Math.min(max, Math.max(CHIP_W, 12 + outer + gap + text + toggle + 10)));
   }
 
   _measure(node) {
@@ -416,7 +429,7 @@ class OvCirrusNetworkMap extends HTMLElement {
       if (g._rowsH) g._rowsH += 6;
       const inner = g.children.reduce((a, c) => a + c._slot, 0) + GAP_X * (n - 1);
       g._w = inner + 2 * PAD;
-      g._h = LABEL_H + PAD + g._rowsH + CHIP_H + PAD;
+      g._h = LABEL_H + PAD + g._rowsH + Math.max(...g.children.map((c) => c._ch)) + PAD;
     }
   }
 
@@ -433,7 +446,7 @@ class OvCirrusNetworkMap extends HTMLElement {
     const right =
       Math.max(...kids.map((c) => Math.max(c._x + (c._rw || c._cw), c._x + c._cw / 2 + (c._labelRight || 0)))) + PAD;
     const top = Math.min(...kids.map((c) => c._y)) - above;
-    const bottom = Math.max(...kids.map((c) => c._y + CHIP_H)) + PAD;
+    const bottom = Math.max(...kids.map((c) => c._y + (c._ch || CHIP_H))) + PAD;
     g._bx = left;
     g._x = left;
     g._y = top;
@@ -451,7 +464,7 @@ class OvCirrusNetworkMap extends HTMLElement {
     if (!node._groups.length || node._collapsed) return;
     if (node._stack) {
       const trunkX = cx - node._gw / 2 + TRUNK / 2;
-      let gy = y + CHIP_H + 36;
+      let gy = y + node._ch + 36;
       for (const g of node._groups) {
         g._x = trunkX + TRUNK / 2 + ox;
         g._y = gy + oy;
@@ -464,7 +477,7 @@ class OvCirrusNetworkMap extends HTMLElement {
       return;
     }
     let x = cx - node._gw / 2;
-    const gy = y + CHIP_H + V_GAP;
+    const gy = y + node._ch + V_GAP;
     for (const g of node._groups) {
       const above = LABEL_H + PAD + (g.leaf ? 0 : g._rowsH || 0);
       const chipY = gy + above;
@@ -533,10 +546,10 @@ class OvCirrusNetworkMap extends HTMLElement {
       }
     }
     out.trunks = out.trunks.map(({ node, g }) => ({
-      x1: node._x + 6, y1: node._y + CHIP_H / 2, tx: g._bx - TRUNK / 2, ty: g._y + 2, x2: g._bx,
+      x1: node._x + 6, y1: node._y + node._ch / 2, tx: g._bx - TRUNK / 2, ty: g._y + 2, x2: g._bx,
     }));
     out.maxX = Math.max(...out.nodes.map((n) => n._x + (n._rw || n._cw)), ...out.groups.map((g) => g._bx + g._bw));
-    out.maxY = Math.max(...out.nodes.map((n) => n._y + CHIP_H), ...out.groups.map((g) => g._y + g._h));
+    out.maxY = Math.max(...out.nodes.map((n) => n._y + (n._ch || CHIP_H)), ...out.groups.map((g) => g._y + g._h));
   }
 
   // ---------- render ----------
@@ -569,7 +582,9 @@ class OvCirrusNetworkMap extends HTMLElement {
         n.groups.forEach((g) => g.children.forEach(walk));
       };
       walk(root);
+      DEVICE_SCALE = Math.min(3, Math.max(1, Number(cfg.device_scale) || 2));
       for (const n of this._index.values()) {
+        n._ch = chipH(n);
         n._cw = this._chipWidth(n);
         n._rw = null;
       }
@@ -587,7 +602,7 @@ class OvCirrusNetworkMap extends HTMLElement {
       const edges = out.edges
         .map((e) => {
           const x1 = e.from._x + e.from._cw / 2;
-          const y1 = e.from._y + CHIP_H;
+          const y1 = e.from._y + e.from._ch;
           const x2 = e.toX;
           const y2 = e.toY;
           const my = (y1 + y2) / 2;
@@ -658,8 +673,9 @@ class OvCirrusNetworkMap extends HTMLElement {
             (this._drag?.id === n.id && this._drag.moved ? " dragging" : "") +
             (this._selected === n.id ? " selected" : "") +
             (sv !== null && n.vlan ? (String(n.vlan) === String(sv) ? " vmatch" : " dim") : "");
-          return `<div class="node ${esc(n.kind)}${sel}" data-id="${esc(n.id)}" style="left:${n._x}px;top:${n._y}px;width:${n._rw || n._cw}px;height:${CHIP_H}px">
-              <div class="ring ${esc(n.status)} ${n.graphic ? "g-" + esc(n.graphic.type) : ""}">${n.graphic ? deviceGraphic(n, true) : `<ha-icon icon="${esc(n.icon)}"></ha-icon>`}${badge}</div>
+          const big = BIG_KINDS.has(n.kind) ? " big" : "";
+          return `<div class="node ${esc(n.kind)}${big}${sel}" data-id="${esc(n.id)}" style="left:${n._x}px;top:${n._y}px;width:${n._rw || n._cw}px;height:${n._ch || CHIP_H}px">
+              <div class="ring ${esc(n.status)} ${n.graphic ? "g-" + esc(n.graphic.type) : ""}"${big ? ` style="--rs:${ringSize(n)}px"` : ""}>${n.graphic ? deviceGraphic(n, true) : `<ha-icon icon="${esc(n.icon)}"></ha-icon>`}${badge}</div>
               <div class="txt"><div class="name" title="${esc(n.name)}">${esc(n.name)}</div>
               <div class="sub" title="${esc(n.subtitle)}">${esc(n.subtitle)}</div></div>${toggle}</div>`;
         })
@@ -752,6 +768,10 @@ class OvCirrusNetworkMap extends HTMLElement {
                       ? `<button class="act" disabled>${scanning === "full" ? "Scanning all 65,535 ports… (can take a few minutes)" : "Scanning…"}</button>`
                       : `<button class="act" data-scan="quick" data-ip="${esc(sel.ip)}" title="About 40 common service ports">Quick scan</button>
                          <button class="act ghost" data-scan="full" data-ip="${esc(sel.ip)}" title="Every TCP port, with nmap service detection when available">Full scan (all ports)</button>`
+                  }</div><div class="muted">${
+                    this._nmap
+                      ? "Full scans use nmap with service detection."
+                      : "nmap isn't installed in Home Assistant, so full scans use the built-in scanner (slower, less detail). See Settings → Repairs for how to add it."
                   }</div>`
                 : ""
             }
@@ -1340,6 +1360,18 @@ const STYLE = `
   form.edit input, form.edit select { font:inherit; padding:5px 6px; border-radius:6px; border:1px solid var(--divider-color);
     background:var(--card-background-color); color:var(--primary-text-color); }
   form.edit .row { display:flex; flex-wrap:wrap; gap:6px; }
+  .node.big { border-radius:999px; gap:14px; }
+  .node.big .ring { width:var(--rs); height:var(--rs); border-width:3px; }
+  .node.big .ring ha-icon { --mdc-icon-size:calc(var(--rs) * 0.52); }
+  .node.big .ring svg.mini { width:calc(var(--rs) * 0.72); height:calc(var(--rs) * 0.72); }
+  .node.big .ring img.photo-mini { width:calc(var(--rs) * 0.8); height:calc(var(--rs) * 0.8); }
+  .node.big .ring.g-switch { width:calc(var(--rs) * 1.1); border-radius:calc(var(--rs) * 0.24); }
+  .node.big .ring.g-switch svg.mini { width:calc(var(--rs) * 0.95); height:calc(var(--rs) * 0.48); }
+  .node.big .ring.g-switch img.photo-mini { width:calc(var(--rs) * 1); height:calc(var(--rs) * 0.7); }
+  .node.big .badge { font-size:16px; min-width:32px; height:32px; line-height:32px; border-radius:16px; right:-10px; top:-10px;
+    padding:0 6px; font-weight:600; box-shadow:0 1px 3px rgba(0,0,0,.25); }
+  .node.big .ring img.logo { width:26px; height:26px; right:-6px; bottom:-6px; }
+  .node.big .new { font-size:11px; padding:2px 6px; left:-10px; top:-9px; }
   .badge { position:absolute; right:-6px; top:-6px; background:var(--primary-color); color:var(--text-primary-color,#fff);
     font-size:10px; min-width:16px; height:16px; line-height:16px; border-radius:8px; text-align:center; padding:0 3px; }
   .txt { min-width:0; flex:1; }
