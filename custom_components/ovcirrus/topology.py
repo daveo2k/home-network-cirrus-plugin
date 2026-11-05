@@ -758,6 +758,7 @@ def build_site_map(
             "link": link,
             "services": svc,
             "discover": bool(dev.get("discover")),
+            "manual": {k: dev.get(k) for k in ("id", "name", "ip", "mac", "type", "switch", "port", "scan", "notes", "discover")},
             "details": [[k, str(v)] for k, v in details if v not in (None, "")],
             "groups": [],
         })

@@ -155,6 +155,184 @@ async def discover(host: str) -> dict:
         "ip": host,
         "ts": started,
         "duration": round(time.time() - started, 1),
+        "mode": "quick",
+        "engine": "built-in",
+        "services": services,
+        "role": guess_role(services),
+        "os": guess_os(services),
+    }
+
+
+# ---------------------------------------------------------------- full TCP scan
+import shutil  # noqa: E402
+import xml.etree.ElementTree as ET  # noqa: E402
+
+FULL_CONCURRENCY = 600
+FULL_TIMEOUT = 0.6
+NMAP_TIMEOUT = 900
+
+# Extra well-known ports (beyond PORTS) used to name results of a full scan.
+WELL_KNOWN: dict[int, str] = {
+    20: "FTP data", 69: "TFTP", 88: "Kerberos", 110: "POP3", 119: "NNTP", 123: "NTP", 135: "MS RPC",
+    143: "IMAP", 161: "SNMP", 389: "LDAP", 465: "SMTPS", 500: "IPsec IKE", 514: "Syslog", 515: "LPD printing",
+    587: "SMTP submission", 636: "LDAPS", 873: "rsync", 993: "IMAPS", 995: "POP3S", 1080: "SOCKS proxy",
+    1194: "OpenVPN", 1433: "MS SQL", 1521: "Oracle DB", 1723: "PPTP", 1900: "UPnP SSDP", 2222: "SSH (alt)",
+    3128: "HTTP proxy", 3478: "STUN", 3483: "Squeezebox", 4000: "Web app", 4443: "Web app TLS",
+    5060: "SIP", 5222: "XMPP", 5353: "mDNS", 5555: "Android debug (ADB)", 5683: "CoAP", 6052: "ESPHome dashboard",
+    6053: "ESPHome API", 6443: "Kubernetes API", 6881: "BitTorrent", 7000: "AirPlay", 7100: "AirPlay",
+    7443: "Web app TLS", 8008: "Chromecast", 8009: "Chromecast", 8086: "InfluxDB", 8088: "Web app",
+    8200: "Duplicati / Vault", 8443: "Web app TLS (UniFi?)", 8883: "MQTT over TLS", 8880: "UniFi portal",
+    9001: "Web app", 9091: "Transmission", 9093: "Alertmanager", 9200: "Elasticsearch", 9999: "Web app",
+    10001: "UniFi discovery", 11211: "Memcached", 21064: "HomeKit (HA bridge)", 27017: "MongoDB",
+    49152: "UPnP", 50000: "Web app", 62078: "Apple iDevice sync",
+}
+
+
+def port_name(port: int) -> str | None:
+    if port in PORTS:
+        return PORTS[port][0]
+    return WELL_KNOWN.get(port)
+
+
+def nmap_available() -> bool:
+    return shutil.which("nmap") is not None
+
+
+def parse_nmap_xml(xml_text: str) -> list[dict]:
+    services: list[dict] = []
+    root = ET.fromstring(xml_text)
+    for port in root.iter("port"):
+        state = port.find("state")
+        if state is None or state.get("state") != "open" or port.get("protocol") != "tcp":
+            continue
+        num = int(port.get("portid"))
+        svc = port.find("service")
+        entry: dict = {"port": num}
+        name = svc.get("name") if svc is not None else None
+        product = " ".join(
+            x for x in ((svc.get("product") if svc is not None else None), (svc.get("version") if svc is not None else None)) if x
+        )
+        tunnel = svc.get("tunnel") if svc is not None else None
+        known = port_name(num)
+        if name and name not in ("unknown", "tcpwrapped"):
+            entry["service"] = known or name
+            entry["nmap_service"] = f"{tunnel}/{name}" if tunnel else name
+        elif known:
+            entry["service"] = known
+        if product:
+            entry["server"] = product[:100]
+        if svc is not None and svc.get("extrainfo"):
+            entry["banner"] = svc.get("extrainfo")[:100]
+        if (name or "").startswith("http") or tunnel == "ssl" and (name or "").startswith("http"):
+            scheme = "https" if tunnel == "ssl" or name == "https" else "http"
+            entry["url"] = f"{scheme}://{{host}}{'' if num in (80, 443) else f':{num}'}/"
+        entry["unknown"] = "service" not in entry
+        if entry["unknown"]:
+            entry["service"] = "Unknown service"
+        services.append(entry)
+    return services
+
+
+async def _nmap_scan(host: str) -> list[dict]:
+    proc = await asyncio.create_subprocess_exec(
+        "nmap", "-sT", "-Pn", "-p-", "-T4", "-sV", "--version-light", "--max-retries", "2", "-oX", "-", host,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    try:
+        out, err = await asyncio.wait_for(proc.communicate(), NMAP_TIMEOUT)
+    except asyncio.TimeoutError:
+        proc.kill()
+        raise
+    if proc.returncode != 0:
+        raise RuntimeError(f"nmap failed: {err.decode(errors='replace')[:200]}")
+    services = parse_nmap_xml(out.decode(errors="replace"))
+    for s in services:
+        if "url" in s:
+            s["url"] = s["url"].replace("{host}", host)
+    return services
+
+
+async def _connect_scan(host: str) -> list[int]:
+    """Plain TCP connect scan of 1-65535 (no nmap)."""
+    sem = asyncio.Semaphore(FULL_CONCURRENCY)
+    open_ports: list[int] = []
+
+    async def one(port: int) -> None:
+        async with sem:
+            try:
+                _, writer = await asyncio.wait_for(asyncio.open_connection(host, port), FULL_TIMEOUT)
+            except (OSError, asyncio.TimeoutError):
+                return
+            open_ports.append(port)
+            writer.close()
+
+    await asyncio.gather(*(one(p) for p in range(1, 65536)))
+    return sorted(open_ports)
+
+
+async def _identify_port(host: str, port: int, sem: asyncio.Semaphore) -> dict:
+    """Name an open port: known list, then banner, then an HTTP request."""
+    if port in PORTS:
+        result = await _probe(host, port, sem)
+        if result:
+            return result
+    entry: dict = {"port": port}
+    async with sem:
+        try:
+            reader, writer = await asyncio.wait_for(asyncio.open_connection(host, port), CONNECT_TIMEOUT)
+        except (OSError, asyncio.TimeoutError):
+            return {"port": port, "service": port_name(port) or "Unknown service", "unknown": port_name(port) is None}
+        try:
+            data = await asyncio.wait_for(reader.read(256), 1.2)  # servers that speak first (SSH, FTP, SMTP…)
+            if not data:
+                writer.write(f"GET / HTTP/1.0\r\nHost: {host}\r\n\r\n".encode())
+                await writer.drain()
+                data = await asyncio.wait_for(reader.read(8192), READ_TIMEOUT)
+        except (OSError, asyncio.TimeoutError):
+            data = b""
+        finally:
+            writer.close()
+    text = data.decode("utf-8", "replace")
+    if text.startswith("HTTP/"):
+        head, _, body = data.partition(b"\r\n\r\n")
+        server = re.search(rb"^Server:\s*(.+)$", head, re.I | re.M)
+        title = TITLE_RE.search(body)
+        entry["service"] = port_name(port) or "Web server"
+        if server:
+            entry["server"] = server.group(1).decode("latin-1").strip()[:80]
+        if title:
+            entry["title"] = re.sub(r"\s+", " ", title.group(1).decode("utf-8", "replace")).strip()[:80]
+        entry["url"] = f"http://{host}:{port}/"
+    elif text.strip():
+        first = text.strip().splitlines()[0]
+        if first.isprintable():
+            entry["banner"] = first[:100]
+        if first.startswith("SSH-"):
+            entry["service"] = port_name(port) or "SSH"
+    entry.setdefault("service", port_name(port) or "Unknown service")
+    entry["unknown"] = entry["service"] == "Unknown service"
+    return entry
+
+
+async def full_scan(host: str) -> dict:
+    """Every TCP port. Uses nmap (with version detection) when installed, else a connect scan."""
+    started = time.time()
+    engine = "nmap" if nmap_available() else "built-in"
+    if engine == "nmap":
+        services = await _nmap_scan(host)
+    else:
+        sem = asyncio.Semaphore(CONCURRENCY)
+        ports = await _connect_scan(host)
+        services = sorted(await asyncio.gather(*(_identify_port(host, p, sem) for p in ports)), key=lambda s: s["port"])
+    for s in services:
+        s.setdefault("unknown", False)
+    return {
+        "ip": host,
+        "ts": started,
+        "duration": round(time.time() - started, 1),
+        "mode": "full",
+        "engine": engine,
         "services": services,
         "role": guess_role(services),
         "os": guess_os(services),

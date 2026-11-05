@@ -551,10 +551,12 @@ class CirrusOptionsFlow(OptionsFlow):
                     "switch": user_input.get("switch") or None,
                     "port": (user_input.get("port") or "").strip() or None,
                     "discover": bool(user_input.get("discover")),
+                    "scan": user_input.get("scan") or "quick",
                     "notes": (user_input.get("notes") or "").strip() or None,
                 }
-                devices = [*self.config_entry.options.get(CONF_MANUAL_DEVICES, []), device]
-                return self._save({CONF_MANUAL_DEVICES: devices})
+                coordinator.store.add_manual(device)
+                coordinator.rebuild()
+                return self._save({})
         defaults = user_input or {}
         switch_options = [SelectOptionDict(value="", label="Find it automatically (MAC table / ARP)")] + [
             SelectOptionDict(value=d["serialNumber"], label=f"{d.get('name')} ({d.get('ipAddress')})") for d in switches
@@ -577,6 +579,15 @@ class CirrusOptionsFlow(OptionsFlow):
                     ),
                     vol.Optional("port", default=defaults.get("port", "")): TextSelector(),
                     vol.Optional("discover", default=defaults.get("discover", True)): BooleanSelector(),
+                    vol.Optional("scan", default=defaults.get("scan", "quick")): SelectSelector(
+                        SelectSelectorConfig(
+                            options=[
+                                SelectOptionDict(value="quick", label="Quick: about 40 common service ports"),
+                                SelectOptionDict(value="full", label="Full: all 65,535 TCP ports (nmap if available)"),
+                            ],
+                            mode=SelectSelectorMode.LIST,
+                        )
+                    ),
                     vol.Optional("notes", default=defaults.get("notes", "")): TextSelector(
                         TextSelectorConfig(multiline=True)
                     ),
@@ -586,10 +597,15 @@ class CirrusOptionsFlow(OptionsFlow):
         )
 
     async def async_step_manual_remove(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
-        devices = list(self.config_entry.options.get(CONF_MANUAL_DEVICES, []))
+        coordinator = self.config_entry.runtime_data
+        devices = coordinator.manual_devices
         if user_input is not None:
             remove = set(user_input.get("remove", []))
-            return self._save({CONF_MANUAL_DEVICES: [d for d in devices if d["id"] not in remove]})
+            for device_id in remove:
+                coordinator.store.remove_manual(device_id)
+            legacy = [d for d in self.config_entry.options.get(CONF_MANUAL_DEVICES, []) if d.get("id") not in remove]
+            coordinator.rebuild()
+            return self._save({CONF_MANUAL_DEVICES: legacy})
         if not devices:
             return self.async_abort(reason="no_manual_devices")
         return self.async_show_form(

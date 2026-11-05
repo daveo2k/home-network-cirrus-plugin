@@ -49,7 +49,7 @@ from .const import (
     EVENT_NEW_CLIENT,
     TOPOLOGY_INTERVAL,
 )
-from .discovery import discover
+from .discovery import discover, full_scan
 from .dns import ReverseResolver, parse_servers
 from .identify import HaDevice, identify, is_private_mac
 from .mac_table import SshError, SwitchTables, fetch_switch_tables, norm_mac
@@ -173,7 +173,24 @@ class CirrusCoordinator(DataUpdateCoordinator[CirrusData]):
 
     @property
     def manual_devices(self) -> list[dict]:
-        return list(self.config_entry.options.get(CONF_MANUAL_DEVICES) or [])
+        """Devices added from the map or the options (older options entries are still honoured)."""
+        stored = {d.get("id"): d for d in self.store.manual}
+        for dev in self.config_entry.options.get(CONF_MANUAL_DEVICES) or []:
+            stored.setdefault(dev.get("id"), dev)
+        return list(stored.values())
+
+    def services_view(self) -> dict[str, dict]:
+        """Scan results with your port names applied."""
+        view: dict[str, dict] = {}
+        for ip, result in self.store.services.items():
+            services = []
+            for svc in result.get("services") or []:
+                label, scope = self.store.port_label(ip, svc["port"])
+                if label:
+                    svc = {**svc, "service": label, "label_scope": scope, "unknown": False, "labelled": True}
+                services.append(svc)
+            view[ip] = {**result, "services": services}
+        return view
 
     async def async_shutdown(self) -> None:
         await super().async_shutdown()
@@ -473,7 +490,7 @@ class CirrusCoordinator(DataUpdateCoordinator[CirrusData]):
         extras = MapExtras(
             identities=identities,
             manual=self.manual_devices,
-            services=self.store.services,
+            services=self.services_view(),
             wan=(data.unifi.get("wan") or None),
             port_layouts=layouts,
             port_vlans=data.port_vlans,
@@ -503,6 +520,11 @@ class CirrusCoordinator(DataUpdateCoordinator[CirrusData]):
                 )
                 maps[sid]["ssh_errors"] = list(data.ssh_errors.values())
                 maps[sid]["positions"] = dict(self.store.positions.get(sid, {}))
+                maps[sid]["switches"] = [
+                    {"serial": s, "name": d.get("name") or s}
+                    for s, d in data.devices.items()
+                    if d.get("deviceFamily") == "AOS" and (d.get("site") or {}).get("id") == sid
+                ]
                 if data.unifi_error:
                     maps[sid]["unifi_error"] = data.unifi_error
             except Exception:  # noqa: BLE001 - never let the map break polling
@@ -551,17 +573,18 @@ class CirrusCoordinator(DataUpdateCoordinator[CirrusData]):
                 continue
             last = (self.store.services.get(ip) or {}).get("ts", 0)
             if time.time() - last > hours * 3600:
-                self.hass.async_create_background_task(self.async_discover(ip), f"ovcirrus discover {ip}")
+                mode = "full" if dev.get("scan") == "full" else "quick"
+                self.hass.async_create_background_task(self.async_discover(ip, mode), f"ovcirrus discover {ip}")
 
-    async def async_discover(self, ip: str) -> dict:
+    async def async_discover(self, ip: str, mode: str = "quick") -> dict:
         if ip in self._scanning:
-            return self.store.services.get(ip) or {}
+            return self.services_view().get(ip) or {}
         self._scanning.add(ip)
         try:
-            result = await discover(ip)
+            result = await (full_scan(ip) if mode == "full" else discover(ip))
             self.store.set_services(ip, result)
             self.rebuild()
-            return result
+            return self.services_view().get(ip, result)
         finally:
             self._scanning.discard(ip)
 

@@ -23,6 +23,8 @@ class EntryStore:
         self.overrides: dict[str, dict] = {}
         self.services: dict[str, dict] = {}
         self.positions: dict[str, dict[str, list[float]]] = {}  # site_id -> node_id -> [dx, dy]
+        self.manual: list[dict] = []  # devices added by the user (map or options)
+        self.port_labels: dict[str, dict[str, str]] = {}  # "*" or IP -> port -> your name for it
         self.baseline_done = False
 
     async def async_load(self) -> None:
@@ -31,6 +33,8 @@ class EntryStore:
         self.overrides = data.get("overrides", {})
         self.services = data.get("services", {})
         self.positions = data.get("positions", {})
+        self.manual = data.get("manual", [])
+        self.port_labels = data.get("port_labels", {})
         self.baseline_done = data.get("baseline_done", False)
 
     def _data(self) -> dict:
@@ -39,6 +43,8 @@ class EntryStore:
             "overrides": self.overrides,
             "services": self.services,
             "positions": self.positions,
+            "manual": self.manual,
+            "port_labels": self.port_labels,
             "baseline_done": self.baseline_done,
         }
 
@@ -115,6 +121,30 @@ class EntryStore:
         else:
             site[node_id] = [round(offset[0], 1), round(offset[1], 1)]
         self.schedule_save()
+
+    def add_manual(self, device: dict) -> None:
+        self.manual = [d for d in self.manual if d.get("id") != device.get("id")] + [device]
+        self.schedule_save()
+
+    def remove_manual(self, device_id: str) -> None:
+        self.manual = [d for d in self.manual if d.get("id") != device_id]
+        self.schedule_save()
+
+    def set_port_label(self, ip: str | None, port: int, label: str | None) -> None:
+        scope = self.port_labels.setdefault(ip or "*", {})
+        if label:
+            scope[str(port)] = label
+        else:
+            scope.pop(str(port), None)
+        self.schedule_save()
+
+    def port_label(self, ip: str, port: int) -> tuple[str | None, str | None]:
+        """Your name for a port on this device, else for every device. Returns (label, scope)."""
+        if (label := self.port_labels.get(ip, {}).get(str(port))):
+            return label, "device"
+        if (label := self.port_labels.get("*", {}).get(str(port))):
+            return label, "all"
+        return None, None
 
     def reset_positions(self, site_id: str) -> None:
         self.positions.pop(site_id, None)

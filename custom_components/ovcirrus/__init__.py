@@ -100,6 +100,9 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     websocket_api.async_register_command(hass, ws_set_override)
     websocket_api.async_register_command(hass, ws_discover)
     websocket_api.async_register_command(hass, ws_set_position)
+    websocket_api.async_register_command(hass, ws_save_device)
+    websocket_api.async_register_command(hass, ws_remove_device)
+    websocket_api.async_register_command(hass, ws_label_port)
     websocket_api.async_register_command(hass, ws_reset_positions)
     return True
 
@@ -299,9 +302,125 @@ def ws_reset_positions(hass: HomeAssistant, connection: websocket_api.ActiveConn
     connection.send_result(msg["id"], {"ok": True})
 
 
+def _local_ip(value: str | None) -> str | None:
+    """Only private / link-local addresses may be scanned or added for scanning."""
+    if not value:
+        return None
+    try:
+        addr = ipaddress.ip_address(value.strip())
+    except ValueError:
+        raise vol.Invalid("Not an IP address") from None
+    if not (addr.is_private or addr.is_link_local) or addr.is_loopback:
+        raise vol.Invalid("Only devices on your local network can be added or scanned")
+    return str(addr)
+
+
 @websocket_api.require_admin
 @websocket_api.websocket_command(
-    {vol.Required("type"): "ovcirrus/discover", vol.Required("entry_id"): str, vol.Required("ip"): str}
+    {
+        vol.Required("type"): "ovcirrus/save_device",
+        vol.Required("entry_id"): str,
+        vol.Optional("id"): str,
+        vol.Required("name"): vol.All(str, vol.Length(min=1, max=80)),
+        vol.Optional("ip"): vol.Any(None, str),
+        vol.Optional("mac"): vol.Any(None, str),
+        vol.Optional("dev_type", default="server"): vol.In(list(TYPES)),
+        vol.Optional("switch"): vol.Any(None, str),
+        vol.Optional("port"): vol.Any(None, str),
+        vol.Optional("scan", default="quick"): vol.In(["none", "quick", "full"]),
+        vol.Optional("notes"): vol.Any(None, str),
+    }
+)
+@websocket_api.async_response
+async def ws_save_device(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict) -> None:
+    """Add (or update) a device on the map, optionally scanning it straight away."""
+    coordinator = _coordinator(hass, msg["entry_id"])
+    if not coordinator:
+        connection.send_error(msg["id"], "not_found", "Unknown entry")
+        return
+    try:
+        ip = _local_ip(msg.get("ip"))
+    except vol.Invalid as err:
+        connection.send_error(msg["id"], "invalid_ip", str(err))
+        return
+    mac = norm_mac(msg.get("mac")) if msg.get("mac") else None
+    if msg.get("mac") and not mac:
+        connection.send_error(msg["id"], "invalid_mac", "Not a valid MAC address")
+        return
+    if not ip and not mac:
+        connection.send_error(msg["id"], "ip_or_mac", "Enter an IP address, a MAC address, or both")
+        return
+    import uuid
+
+    device = {
+        "id": msg.get("id") or uuid.uuid4().hex[:8],
+        "name": msg["name"].strip(),
+        "ip": ip,
+        "mac": mac,
+        "type": msg["dev_type"],
+        "switch": msg.get("switch") or None,
+        "port": (msg.get("port") or "").strip() or None,
+        "discover": msg["scan"] != "none" and bool(ip),
+        "scan": msg["scan"] if msg["scan"] != "none" else "quick",
+        "notes": (msg.get("notes") or "").strip() or None,
+    }
+    coordinator.store.add_manual(device)
+    coordinator.rebuild()
+    if device["discover"]:
+        hass.async_create_background_task(coordinator.async_discover(ip, device["scan"]), f"ovcirrus scan {ip}")
+    connection.send_result(msg["id"], {"device": device})
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command(
+    {vol.Required("type"): "ovcirrus/remove_device", vol.Required("entry_id"): str, vol.Required("id"): str}
+)
+@callback
+def ws_remove_device(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict) -> None:
+    coordinator = _coordinator(hass, msg["entry_id"])
+    if not coordinator:
+        connection.send_error(msg["id"], "not_found", "Unknown entry")
+        return
+    coordinator.store.remove_manual(msg["id"])
+    coordinator.rebuild()
+    connection.send_result(msg["id"], {"ok": True})
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "ovcirrus/label_port",
+        vol.Required("entry_id"): str,
+        vol.Required("ip"): str,
+        vol.Required("port"): vol.All(vol.Coerce(int), vol.Range(min=1, max=65535)),
+        vol.Optional("label"): vol.Any(None, vol.All(str, vol.Length(max=60))),
+        vol.Optional("all_devices", default=False): bool,
+    }
+)
+@callback
+def ws_label_port(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict) -> None:
+    """Name a port the scan could not identify, for this device or for every device."""
+    coordinator = _coordinator(hass, msg["entry_id"])
+    if not coordinator:
+        connection.send_error(msg["id"], "not_found", "Unknown entry")
+        return
+    label = (msg.get("label") or "").strip() or None
+    scope_ip = None if msg["all_devices"] else msg["ip"]
+    coordinator.store.set_port_label(scope_ip, msg["port"], label)
+    if label is None:  # clearing: remove it from both scopes so the scan result shows again
+        coordinator.store.set_port_label(None if scope_ip else msg["ip"], msg["port"], None)
+    coordinator.rebuild()
+    connection.send_result(msg["id"], {"ok": True})
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "ovcirrus/discover",
+        vol.Required("entry_id"): str,
+        vol.Required("ip"): str,
+        vol.Optional("mode", default="quick"): vol.In(["quick", "full"]),
+    }
 )
 @websocket_api.async_response
 async def ws_discover(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict) -> None:
@@ -318,5 +437,5 @@ async def ws_discover(hass: HomeAssistant, connection: websocket_api.ActiveConne
     if not coordinator:
         connection.send_error(msg["id"], "not_found", "Unknown entry")
         return
-    result = await coordinator.async_discover(str(addr))
+    result = await coordinator.async_discover(str(addr), msg["mode"])
     connection.send_result(msg["id"], result)

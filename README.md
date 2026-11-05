@@ -115,9 +115,16 @@ automation:
 
 ## Servers & manual devices
 
-Options → *Servers & manual devices* → *Add a device*: name, IP and/or MAC, type, and optionally the switch and port. Without a port, the device is located from the switch MAC table (or ARP / UniFi). Manual devices appear in their own group on the map.
+**From the map (admins):** click **+ Add device**. Enter a name, an IP and/or MAC, a type and, optionally, the switch and port. Without a port, the device is placed from the switch MAC table (or ARP / UniFi). Choose how to discover its services:
 
-**Service discovery** (optional per device) runs a quick TCP check of about 40 common ports (SSH, HTTP/S, SMB, NFS, RDP, VNC, Proxmox, Synology, Plex, Jellyfin, Home Assistant, MQTT, databases, printers, RTSP…). It reads banners, web page titles and TLS certificate names, and guesses the role and OS. It runs on enable, then every 24 h by default (Options → *Polling*). Admins can also press **Scan services** on any device with an IP in the details panel. Only private / link-local addresses can be scanned. Some intrusion-detection systems will notice a scan.
+- **Quick scan:** about 40 common service ports (SSH, HTTP/S, SMB, NFS, RDP, VNC, Proxmox, Synology, Plex, Jellyfin, Home Assistant, MQTT, databases, printers, RTSP…), with banners, page titles and TLS certificate names.
+- **Full scan:** all 65,535 TCP ports. It uses **nmap** with service and version detection when nmap is available to Home Assistant, otherwise a built-in TCP connect scan that then identifies each open port. It can take a few minutes.
+
+Any wired device the map already shows (from the MAC table or LLDP) has **Add to map as a device** in its details, pre-filled with its name, IP, MAC and port. Added devices have **Edit device** / **Remove from map**, plus **Quick scan** / **Full scan** buttons.
+
+**Unknown ports:** open ports that nothing recognises are flagged *unknown*. Click **Name this port** to say what runs there, either for that device only or for that port on every device. Your names replace "Unknown service" in all future scans, and **rename** / **Clear name** change or remove them.
+
+Devices can also be added under **Configure** → **Servers & manual devices**. Scans repeat every 24 h by default (**Configure** → **General**). Only private / link-local addresses can be scanned, and some intrusion-detection systems will notice a scan.
 
 ## Speed test & WAN
 

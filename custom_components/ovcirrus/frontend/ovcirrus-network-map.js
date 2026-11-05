@@ -712,25 +712,86 @@ class OvCirrusNetworkMap extends HTMLElement {
     const entryId = site?.entry_id;
     const svc = sel?.services;
     const canScan = this._isAdmin && sel?.ip && !["internet", "ap", "switch", "gateway"].includes(sel.kind);
+    const scanning = this._scanning && this._scanning.ip === sel?.ip ? this._scanning.mode : null;
+    const svcRow = (x) => {
+      const extra = [x.title, x.server, x.banner, x.certificate].filter(Boolean).join(" · ");
+      const label = x.url ? `<a href="${esc(x.url)}" target="_blank" rel="noopener noreferrer">${esc(x.service)}</a>` : esc(x.service);
+      const naming = this._labeling && this._labeling.ip === sel.ip && this._labeling.port === x.port;
+      const nameBtn =
+        this._isAdmin && (x.unknown || x.labelled)
+          ? `<button class="linkbtn" data-nameport="${x.port}">${x.labelled ? "rename" : "Name this port"}</button>`
+          : "";
+      const form = naming
+        ? `<form class="portname" data-portform="${x.port}"><input id="ovc-portname" placeholder="What runs on port ${x.port}?" value="${esc(x.labelled ? x.service : "")}" maxlength="60">
+             <label class="chk"><input type="checkbox" id="ovc-portall" ${x.label_scope === "all" ? "checked" : ""}> Use for this port on every device</label>
+             <div class="row"><button class="act" type="submit">Save</button><button class="act ghost" type="button" data-portcancel>Cancel</button>
+             ${x.labelled ? `<button class="act ghost" type="button" data-portclear="${x.port}">Clear name</button>` : ""}</div></form>`
+        : "";
+      const tag = x.unknown ? `<span class="tag unk">unknown</span>` : x.labelled ? `<span class="tag">${x.label_scope === "all" ? "your name · all devices" : "your name"}</span>` : "";
+      return `<tr class="${x.unknown ? "unk" : ""}"><td>${x.port}</td><td>${label} ${tag}${extra ? `<div class="muted">${esc(extra)}</div>` : ""}${nameBtn}${form}</td></tr>`;
+    };
+    const unknownCount = (svc?.services || []).filter((x) => x.unknown).length;
     const servicesBlock =
       sel && (svc || canScan)
-        ? `<div class="section"><div class="sublabel">Services${svc?.ts ? ` · scanned ${esc(ago(svc.ts))}` : ""}</div>
+        ? `<div class="section"><div class="sublabel">Services${
+            svc?.ts ? ` · ${svc.mode === "full" ? "full scan" : "quick scan"}${svc.engine === "nmap" ? " (nmap)" : ""} · ${esc(ago(svc.ts))}` : ""
+          }</div>
             ${svc?.role || svc?.os ? `<div class="role">${esc([svc.role, svc.os].filter(Boolean).join(" · "))}</div>` : ""}
+            ${unknownCount ? `<div class="muted">${unknownCount} open port${unknownCount > 1 ? "s" : ""} not recognised: name ${unknownCount > 1 ? "them" : "it"} below.</div>` : ""}
             ${
               svc?.services?.length
-                ? `<table class="svc">${svc.services
-                    .map((x) => {
-                      const extra = x.title || x.server || x.banner || x.certificate || "";
-                      const name = x.url ? `<a href="${esc(x.url)}" target="_blank" rel="noopener noreferrer">${esc(x.service)}</a>` : esc(x.service);
-                      return `<tr><td>${x.port}</td><td>${name}${extra ? `<div class="muted">${esc(extra)}</div>` : ""}</td></tr>`;
-                    })
-                    .join("")}</table>`
+                ? `<table class="svc">${svc.services.map(svcRow).join("")}</table>`
                 : svc
-                ? `<div class="muted">No common services answered.</div>`
+                ? `<div class="muted">No open ${svc.mode === "full" ? "TCP ports" : "common service ports"} found.</div>`
                 : ""
             }
-            ${canScan ? `<button class="act" data-scan="${esc(sel.ip)}" ${this._scanning ? "disabled" : ""}>${this._scanning ? "Scanning…" : svc ? "Scan again" : "Scan services"}</button>` : ""}
+            ${
+              canScan
+                ? `<div class="row">${
+                    scanning
+                      ? `<button class="act" disabled>${scanning === "full" ? "Scanning all 65,535 ports… (can take a few minutes)" : "Scanning…"}</button>`
+                      : `<button class="act" data-scan="quick" data-ip="${esc(sel.ip)}" title="About 40 common service ports">Quick scan</button>
+                         <button class="act ghost" data-scan="full" data-ip="${esc(sel.ip)}" title="Every TCP port, with nmap service detection when available">Full scan (all ports)</button>`
+                  }</div>`
+                : ""
+            }
           </div>`
+        : "";
+    // ---- add / edit device form
+    const switchOptions = (site?.switches || [])
+      .map((x) => `<option value="${esc(x.serial)}" ${this._form?.values?.switch === x.serial ? "selected" : ""}>${esc(x.name)}</option>`)
+      .join("");
+    const fv = this._form?.values || {};
+    const typeOpts = Object.entries(this._types || {})
+      .map(([k, v]) => `<option value="${esc(k)}" ${(fv.dev_type || "server") === k ? "selected" : ""}>${esc(v)}</option>`)
+      .join("");
+    const formBlock = this._form
+      ? `<div class="panel"><div class="ptitle"><ha-icon icon="mdi:plus-network"></ha-icon><b>${this._form.mode === "edit" ? "Edit device" : "Add a device"}</b>
+           <button class="close" data-formclose>×</button></div>
+           <form class="edit devform" data-devform>
+             <label>Name<input id="ovc-d-name" required maxlength="80" value="${esc(fv.name || "")}" placeholder="e.g. Proxmox host"></label>
+             <label>IP address<input id="ovc-d-ip" value="${esc(fv.ip || "")}" placeholder="192.168.69.20"></label>
+             <label>MAC address <span class="muted">(optional; places it from the switch MAC table)</span><input id="ovc-d-mac" value="${esc(fv.mac || "")}" placeholder="aa:bb:cc:dd:ee:ff"></label>
+             <label>Type<select id="ovc-d-type">${typeOpts}</select></label>
+             <label>Switch<select id="ovc-d-switch"><option value="">Find it automatically</option>${switchOptions}</select></label>
+             <label>Switch port <span class="muted">(optional, e.g. 1/1/22)</span><input id="ovc-d-port" value="${esc(fv.port || "")}"></label>
+             <label>Discover services<select id="ovc-d-scan">
+               <option value="quick" ${(fv.scan || "quick") === "quick" && fv.discover !== false ? "selected" : ""}>Quick scan (about 40 common ports)</option>
+               <option value="full" ${fv.scan === "full" && fv.discover !== false ? "selected" : ""}>Full scan (all 65,535 TCP ports)</option>
+               <option value="none" ${fv.discover === false ? "selected" : ""}>Don't scan</option></select></label>
+             <label>Notes<input id="ovc-d-notes" value="${esc(fv.notes || "")}"></label>
+             ${this._formError ? `<div class="formerr">${esc(this._formError)}</div>` : ""}
+             <div class="row"><button class="act" type="submit">${this._form.mode === "edit" ? "Save" : "Add to map"}</button>
+               <button class="act ghost" type="button" data-formclose>Cancel</button>
+               ${this._form.mode === "edit" ? `<button class="act ghost danger" type="button" data-devremove="${esc(fv.id)}">Remove from map</button>` : ""}</div>
+           </form></div>`
+      : "";
+    const canAdd = this._isAdmin && sel && ["wired", "endpoint", "bridge"].includes(sel.kind) && (sel.ip || sel.mac);
+    const deviceActions =
+      this._isAdmin && sel?.kind === "manual"
+        ? `<button class="act ghost" data-devedit>Edit device</button>`
+        : canAdd
+        ? `<button class="act ghost" data-devpromote>Add to map as a device</button>`
         : "";
     const speedBlock =
       sel?.kind === "internet" && this._speed?.length
@@ -755,7 +816,7 @@ class OvCirrusNetworkMap extends HTMLElement {
            ${sel.is_new ? `<span class="new inline">NEW</span>` : ""}<button class="close" data-close>×</button></div>${graphicBlock}
            ${speedBlock}
            <table>${(sel.details || []).map(([k, v]) => `<tr><td>${esc(k)}</td><td>${esc(v)}</td></tr>`).join("")}</table>
-           ${servicesBlock}${editBlock}</div>`
+           ${servicesBlock}${editBlock}${deviceActions}</div>`
       : "";
 
     this.shadowRoot.innerHTML = `<style>${STYLE}</style>
@@ -767,8 +828,8 @@ class OvCirrusNetworkMap extends HTMLElement {
             this._canEditLayout()
               ? `<div class="layout">${
                   this._editLayout
-                    ? `<span class="hint">Drag devices to arrange the map${this._snap ? " (hold Alt to place freely)" : ""}</span><button data-layout="snap" class="${this._snap ? "on" : ""}" aria-pressed="${this._snap}" title="Snap devices to a ${this._grid}px grid">Snap to grid</button><button data-layout="reset" title="Put every device back where it was drawn automatically">Reset layout</button><button data-layout="done" class="on">Done</button>`
-                    : `<button data-layout="edit" title="Drag devices to rearrange the map">Edit layout</button>`
+                    ? `<span class="hint">Drag devices to arrange the map${this._snap ? " (hold Alt to place freely)" : ""}</span><button data-layout="add" title="Add a server or other wired device to the map">+ Add device</button><button data-layout="snap" class="${this._snap ? "on" : ""}" aria-pressed="${this._snap}" title="Snap devices to a ${this._grid}px grid">Snap to grid</button><button data-layout="reset" title="Put every device back where it was drawn automatically">Reset layout</button><button data-layout="done" class="on">Done</button>`
+                    : `${this._isAdmin ? `<button data-layout="add" title="Add a server or other wired device to the map">+ Add device</button>` : ""}<button data-layout="edit" title="Drag devices to rearrange the map">Edit layout</button>`
                 }</div>`
               : ""
           }<div class="zoom"><button data-font="-" title="Smaller map text" aria-label="Smaller map text">A−</button><button data-font="+" title="Larger map text" aria-label="Larger map text">A+</button><span class="sep"></span><button data-zoom="-" title="Zoom out">−</button><button data-zoom="fit" title="Fit to width">fit</button><button data-zoom="+" title="Zoom in">+</button></div>
@@ -783,7 +844,7 @@ class OvCirrusNetworkMap extends HTMLElement {
             : ""
         }
         <div class="viewport" style="${cfg.height === "fill" ? "" : `height:${cfg.height}px`}">${this._error && !site ? `<div class="empty">${esc(this._error)}</div>` : body}</div>
-        ${panel}
+        ${this._form ? formBlock : panel}
       </ha-card>`;
 
     const vp = this.shadowRoot.querySelector(".viewport");
@@ -899,6 +960,10 @@ class OvCirrusNetworkMap extends HTMLElement {
           this._zoom = this._zoom ?? this._fitZoom; // keep the scale steady while arranging
         }
         if (action === "done") this._editLayout = false;
+        if (action === "add") {
+          this._form = { mode: "add", values: { dev_type: "server", scan: "quick" } };
+          this._formError = null;
+        }
         if (action === "snap") {
           this._snap = !this._snap;
           try {
@@ -937,16 +1002,113 @@ class OvCirrusNetworkMap extends HTMLElement {
       this._render();
     });
     const entryId = this._sites?.[this._siteIdx]?.entry_id;
-    root.querySelector("[data-scan]")?.addEventListener("click", async (ev) => {
-      this._scanning = true;
-      this._render();
+    root.querySelectorAll("[data-scan]").forEach((b) =>
+      b.addEventListener("click", async () => {
+        const ip = b.dataset.ip, mode = b.dataset.scan;
+        this._scanning = { ip, mode };
+        this._render();
+        try {
+          await this._hass.callWS({ type: "ovcirrus/discover", entry_id: entryId, ip, mode });
+        } catch (err) {
+          console.warn("ovcirrus scan failed", err);
+        }
+        this._scanning = null;
+        await this._fetch();
+      })
+    );
+    // name unknown ports
+    root.querySelectorAll("[data-nameport]").forEach((b) =>
+      b.addEventListener("click", () => {
+        const sel = this._index?.get(this._selected);
+        this._labeling = { ip: sel?.ip, port: Number(b.dataset.nameport) };
+        this._editing = true; // pause refresh re-renders while typing
+        this._render();
+        root.getElementById("ovc-portname")?.focus();
+      })
+    );
+    const savePort = async (port, label, all) => {
+      const sel = this._index?.get(this._selected);
       try {
-        await this._hass.callWS({ type: "ovcirrus/discover", entry_id: entryId, ip: ev.currentTarget.dataset.scan });
+        await this._hass.callWS({ type: "ovcirrus/label_port", entry_id: entryId, ip: sel?.ip, port, label, all_devices: all });
       } catch (err) {
-        console.warn("ovcirrus scan failed", err);
+        console.warn("ovcirrus: could not name port", err);
       }
-      this._scanning = false;
+      this._labeling = null;
+      this._editing = false;
       await this._fetch();
+    };
+    root.querySelector("[data-portform]")?.addEventListener("submit", (ev) => {
+      ev.preventDefault();
+      savePort(Number(ev.currentTarget.dataset.portform), root.getElementById("ovc-portname").value, root.getElementById("ovc-portall").checked);
+    });
+    root.querySelector("[data-portcancel]")?.addEventListener("click", () => {
+      this._labeling = null;
+      this._editing = false;
+      this._render();
+    });
+    root.querySelector("[data-portclear]")?.addEventListener("click", (ev) =>
+      savePort(Number(ev.currentTarget.dataset.portclear), null, root.getElementById("ovc-portall").checked)
+    );
+    // add / edit / remove devices
+    const openForm = (mode, values) => {
+      this._form = { mode, values };
+      this._formError = null;
+      this._editing = true;
+      this._render();
+      root.getElementById("ovc-d-name")?.focus();
+    };
+    root.querySelector("[data-devpromote]")?.addEventListener("click", () => {
+      const sel = this._index?.get(this._selected);
+      const port = (sel.details || []).find(([k]) => k === "Port")?.[1];
+      openForm("add", {
+        name: sel.name, ip: sel.ip || "", mac: sel.mac || "", dev_type: sel.dev_type && sel.dev_type !== "unknown" ? sel.dev_type : "server",
+        port: port || "", scan: "quick",
+      });
+    });
+    root.querySelector("[data-devedit]")?.addEventListener("click", () => {
+      const m = this._index?.get(this._selected)?.manual || {};
+      openForm("edit", { ...m, dev_type: m.type || "server" });
+    });
+    root.querySelectorAll("[data-formclose]").forEach((b) =>
+      b.addEventListener("click", () => {
+        this._form = null;
+        this._editing = false;
+        this._render();
+      })
+    );
+    root.querySelector("[data-devremove]")?.addEventListener("click", async (ev) => {
+      try {
+        await this._hass.callWS({ type: "ovcirrus/remove_device", entry_id: entryId, id: ev.currentTarget.dataset.devremove });
+      } catch (err) {
+        console.warn("ovcirrus: could not remove device", err);
+      }
+      this._form = null;
+      this._editing = false;
+      this._selected = null;
+      await this._fetch();
+    });
+    root.querySelector("[data-devform]")?.addEventListener("submit", async (ev) => {
+      ev.preventDefault();
+      const v = (id) => root.getElementById(id).value.trim();
+      const msg = {
+        type: "ovcirrus/save_device", entry_id: entryId, name: v("ovc-d-name"), ip: v("ovc-d-ip") || null,
+        mac: v("ovc-d-mac") || null, dev_type: v("ovc-d-type"), switch: v("ovc-d-switch") || null,
+        port: v("ovc-d-port") || null, scan: v("ovc-d-scan"), notes: v("ovc-d-notes") || null,
+      };
+      if (this._form.mode === "edit" && this._form.values.id) msg.id = this._form.values.id;
+      try {
+        const res = await this._hass.callWS(msg);
+        this._form = null;
+        this._editing = false;
+        this._selected = `manual-${res?.device?.id || msg.id}`;
+        if (msg.scan !== "none" && msg.ip) this._scanning = { ip: msg.ip, mode: msg.scan };
+        await this._fetch();
+        if (this._scanning) setTimeout(() => this._fetch(), msg.scan === "full" ? 30000 : 6000);
+        setTimeout(() => ((this._scanning = null), this._fetch()), msg.scan === "full" ? 240000 : 15000);
+      } catch (err) {
+        this._formError = err?.message || String(err);
+        this._render();
+      }
     });
     root.querySelector("[data-startedit]")?.addEventListener("click", () => {
       this._editing = true;
@@ -965,7 +1127,7 @@ class OvCirrusNetworkMap extends HTMLElement {
       this._editing = false;
       await this._fetch();
     };
-    const form = root.querySelector("form.edit");
+    const form = root.querySelector("form.edit[data-edit]"); // rename form only, not the device form
     form?.addEventListener("submit", (ev) => {
       ev.preventDefault();
       save(form.dataset.edit, root.getElementById("ovc-name").value, root.getElementById("ovc-type").value);
@@ -1161,6 +1323,19 @@ const STYLE = `
   .act.ghost { background:transparent; color:var(--primary-color); }
   .act[disabled] { opacity:.6; cursor:progress; }
   form.edit { margin-top:10px; display:grid; gap:6px; font-size:12px; }
+  .row { display:flex; flex-wrap:wrap; gap:6px; align-items:center; }
+  .linkbtn { display:inline-block; margin-top:2px; border:none; background:none; padding:0; font:inherit; font-size:11px;
+    color:var(--primary-color); cursor:pointer; text-decoration:underline; }
+  .tag { display:inline-block; font-size:10px; padding:0 5px; border-radius:6px; border:1px solid var(--divider-color);
+    color:var(--secondary-text-color); margin-left:4px; }
+  .tag.unk { border-color:var(--warning-color,#ffa600); color:var(--warning-color,#ffa600); background:none; padding:0 5px; }
+  tr.unk td:first-child { color:var(--warning-color,#ffa600); font-weight:600; }
+  form.portname { display:grid; gap:5px; margin-top:6px; }
+  form.portname input[type=text], form.portname input:not([type]) { font:inherit; padding:4px 6px; border-radius:6px;
+    border:1px solid var(--divider-color); background:var(--card-background-color); color:var(--primary-text-color); }
+  .chk { display:flex; gap:6px; align-items:center; font-size:11px; color:var(--secondary-text-color); }
+  .formerr { color:var(--error-color,#db4437); font-size:12px; }
+  .act.danger { border-color:var(--error-color,#db4437); color:var(--error-color,#db4437); }
   form.edit label { display:grid; gap:2px; color:var(--secondary-text-color); }
   form.edit input, form.edit select { font:inherit; padding:5px 6px; border-radius:6px; border:1px solid var(--divider-color);
     background:var(--card-background-color); color:var(--primary-text-color); }
