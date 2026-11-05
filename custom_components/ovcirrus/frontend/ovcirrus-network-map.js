@@ -2,18 +2,29 @@
  * OmniVista Cirrus network map card for Home Assistant.
  * type: custom:ovcirrus-network-map
  * Options: entry_id, site (id or name), refresh (s, default 30), expand_clients (bool),
- *          max_columns (default 3), height (px, default 640), title
+ *          max_columns (default 3), height (px, default 640), title,
+ *          font_scale (text size multiplier, default 1; viewers can change it with A− / A+)
  */
 const CHIP_W = 210; // minimum device box width
-const MAX_CHIP_W = 380; // boxes grow to fit their text up to this, then ellipsis
-const CHIP_H = 54;
+const MAX_CHIP_W = 380; // boxes grow to fit their text up to this (times the text size), then ellipsis
+const BASE = { CHIP_H: 54, LABEL_H: 24, LABEL_ROW: 19 };
+let CHIP_H = BASE.CHIP_H;
 const GAP_X = 22;
 const ROW_GAP = 12;
 const PAD = 14;
-const LABEL_H = 24; // title row inside the box: PAD above the title, then title + gap before the contents
+let LABEL_H = BASE.LABEL_H; // title row inside the box: PAD above the title, then title + gap before the contents
 const V_GAP = 64;
 const TRUNK = 28;
-const LABEL_ROW = 19; // height of one link label row inside a group box
+let LABEL_ROW = BASE.LABEL_ROW; // height of one link label row inside a group box
+let FS = 1; // text size multiplier for the map
+const FS_MIN = 0.7, FS_MAX = 1.8, FS_KEY = "ovcirrus-font-scale";
+function applyFontScale(fs) {
+  FS = fs;
+  const up = Math.max(1, fs);
+  CHIP_H = Math.round(BASE.CHIP_H * (0.55 + 0.45 * up));
+  LABEL_H = Math.round(BASE.LABEL_H * up);
+  LABEL_ROW = Math.round(BASE.LABEL_ROW * Math.max(0.85, fs));
+}
 const BUNDLE_STEP = 16; // spacing between parallel link lines
 
 const esc = (s) =>
@@ -203,7 +214,14 @@ class OvCirrusNetworkMap extends HTMLElement {
   }
 
   setConfig(config) {
-    this._config = { refresh: 30, max_columns: 3, height: 640, expand_clients: false, ...config };
+    this._config = { refresh: 30, max_columns: 3, height: 640, expand_clients: false, font_scale: 1, ...config };
+    let stored = null;
+    try {
+      stored = Number(localStorage.getItem(FS_KEY)) || null;
+    } catch (e) {
+      stored = null; // storage blocked: fall back to the card setting
+    }
+    this._fs = Math.min(FS_MAX, Math.max(FS_MIN, stored || Number(this._config.font_scale) || 1));
   }
 
   static getStubConfig() {
@@ -274,7 +292,9 @@ class OvCirrusNetworkMap extends HTMLElement {
   _textWidth(text, font) {
     if (!this._ctx) this._ctx = document.createElement("canvas").getContext("2d");
     if (!this._family) this._family = getComputedStyle(this).fontFamily || "sans-serif";
-    this._ctx.font = `${font} ${this._family}`;
+    // font is "[weight] <size>px"; scale the size by the current text size setting
+    const scaled = font.replace(/([\d.]+)px/, (_, n) => `${(Number(n) * FS).toFixed(2)}px`);
+    this._ctx.font = `${scaled} ${this._family}`;
     return this._ctx.measureText(text || "").width;
   }
 
@@ -312,7 +332,7 @@ class OvCirrusNetworkMap extends HTMLElement {
     const toggle = n.groups.some((g) => g.children.length) ? 30 : 0;
     const text = Math.max(this._textWidth(n.name, "600 13px"), this._textWidth(n.subtitle, "11px"));
     // padding 6+6, gap ring->text 10, a little slack for sub-pixel rounding
-    return Math.round(Math.min(MAX_CHIP_W, Math.max(CHIP_W, 12 + ring + 10 + text + toggle + 8)));
+    return Math.round(Math.min(MAX_CHIP_W * Math.max(1, FS), Math.max(CHIP_W, 12 + ring + 10 + text + toggle + 8)));
   }
 
   _measure(node) {
@@ -456,6 +476,7 @@ class OvCirrusNetworkMap extends HTMLElement {
     let H = 0;
     if (site) {
       const root = site.root;
+      applyFontScale(this._fs || 1);
       VLAN_NAMES = Object.fromEntries(Object.entries(site.vlans || {}).map(([k, v]) => [k, v.name]));
       VLAN_COLORS = Object.fromEntries(Object.keys(site.vlans || {}).map((k, i) => [k, VLAN_PALETTE[i % VLAN_PALETTE.length]]));
       if (this._vlan != null && !(String(this._vlan) in (site.vlans || {}))) this._vlan = null;
@@ -558,7 +579,7 @@ class OvCirrusNetworkMap extends HTMLElement {
           const sel =
             (this._selected === n.id ? " selected" : "") +
             (sv !== null && n.vlan ? (String(n.vlan) === String(sv) ? " vmatch" : " dim") : "");
-          return `<div class="node ${esc(n.kind)}${sel}" data-id="${esc(n.id)}" style="left:${n._x}px;top:${n._y}px;width:${n._rw || n._cw}px">
+          return `<div class="node ${esc(n.kind)}${sel}" data-id="${esc(n.id)}" style="left:${n._x}px;top:${n._y}px;width:${n._rw || n._cw}px;height:${CHIP_H}px">
               <div class="ring ${esc(n.status)} ${n.graphic ? "g-" + esc(n.graphic.type) : ""}">${n.graphic ? deviceGraphic(n, true) : `<ha-icon icon="${esc(n.icon)}"></ha-icon>`}${badge}</div>
               <div class="txt"><div class="name" title="${esc(n.name)}">${esc(n.name)}</div>
               <div class="sub" title="${esc(n.subtitle)}">${esc(n.subtitle)}</div></div>${toggle}</div>`;
@@ -658,12 +679,14 @@ class OvCirrusNetworkMap extends HTMLElement {
            ${servicesBlock}${editBlock}</div>`
       : "";
 
+    // Text size lives on the host element so it inherits into everything in the shadow DOM.
+    this.style.setProperty("--fs", String(this._fs || 1));
     this.shadowRoot.innerHTML = `<style>${STYLE}</style>
       <ha-card>
         <div class="header">
           <div class="title">${esc(cfg.title || "Network map")}</div>${siteSel}
           <div class="stats">${stats}</div>
-          <div class="zoom"><button data-zoom="-">−</button><button data-zoom="fit">fit</button><button data-zoom="+">+</button></div>
+          <div class="zoom"><button data-font="-" title="Smaller text" aria-label="Smaller text">A−</button><button data-font="+" title="Larger text" aria-label="Larger text">A+</button><span class="sep"></span><button data-zoom="-" title="Zoom out">−</button><button data-zoom="fit" title="Fit to width">fit</button><button data-zoom="+" title="Zoom in">+</button></div>
         </div>${warn}${
           site && Object.keys(site.vlans || {}).length && cfg.show_vlans !== false
             ? `<div class="vlans"><span class="vlabel">VLANs</span>${Object.entries(site.vlans)
@@ -761,6 +784,18 @@ class OvCirrusNetworkMap extends HTMLElement {
       save(form.dataset.edit, root.getElementById("ovc-name").value, root.getElementById("ovc-type").value);
     });
     root.querySelector("[data-reset]")?.addEventListener("click", () => save(form.dataset.edit, null, null));
+    root.querySelectorAll("[data-font]").forEach((b) =>
+      b.addEventListener("click", () => {
+        const step = b.dataset.font === "+" ? 0.1 : -0.1;
+        this._fs = Math.round(Math.min(FS_MAX, Math.max(FS_MIN, (this._fs || 1) + step)) * 10) / 10;
+        try {
+          localStorage.setItem(FS_KEY, String(this._fs));
+        } catch (e) {
+          // storage blocked: the size still applies until the page reloads
+        }
+        this._render();
+      })
+    );
     root.querySelectorAll("[data-zoom]").forEach((b) =>
       b.addEventListener("click", () => {
         const z = this._zoom ?? this._fitZoom ?? 1;
@@ -803,6 +838,8 @@ const STYLE = `
   select.site { background:transparent; border:1px solid var(--divider-color); border-radius:6px; padding:2px 6px; color:var(--primary-text-color); }
   .stats { display:flex; gap:12px; margin-left:auto; color:var(--secondary-text-color); }
   .stat { display:flex; align-items:center; gap:4px; } .stat ha-icon { --mdc-icon-size:18px; }
+  .zoom { display:flex; align-items:center; }
+  .zoom .sep { width:8px; }
   .zoom button { border:1px solid var(--divider-color); background:var(--card-background-color); color:var(--primary-text-color);
     border-radius:6px; min-width:30px; height:26px; cursor:pointer; margin-left:2px; }
   .warn { background:var(--warning-color,#ffa600); color:#000; font-size:12px; padding:2px 16px; }
@@ -814,19 +851,19 @@ const STYLE = `
   .edge { fill:none; stroke:var(--secondary-text-color); stroke-width:1.2; opacity:.7; }
   .edge.down { stroke:var(--error-color,#db4437); opacity:1; }
   .edge.dashed { stroke-dasharray:5 4; }
-  .elabel { position:absolute; z-index:1; display:flex; align-items:center; gap:3px; white-space:nowrap; height:17px;
+  .elabel { position:absolute; z-index:1; display:flex; align-items:center; gap:3px; white-space:nowrap; height:calc(17px * var(--fs, 1));
     width:max-content; max-width:none; box-sizing:border-box; /* never shrink to the space left on the right */
-    font-size:10.5px; color:var(--secondary-text-color); background:var(--card-background-color);
+    font-size:calc(10.5px * var(--fs, 1)); color:var(--secondary-text-color); background:var(--card-background-color);
     border:1px solid var(--divider-color); padding:0 4px; border-radius:5px; pointer-events:auto; }
   .elabel b { font-weight:600; color:var(--primary-text-color); }
   .elabel.dim { opacity:.25; }
   .elabel i.sw { display:inline-block; width:8px; height:3px; border-radius:2px; }
-  .vc { display:inline-block; font-size:9.5px; line-height:13px; padding:0 4px; border-radius:7px; font-variant-numeric:tabular-nums;
+  .vc { display:inline-block; font-size:calc(9.5px * var(--fs, 1)); line-height:calc(13px * var(--fs, 1)); padding:0 4px; border-radius:7px; font-variant-numeric:tabular-nums;
     border:1px solid var(--c); color:var(--c); background:transparent; cursor:default; }
   .vc.u { background:var(--c); color:#fff; }
   .vc.on { outline:2px solid var(--c); outline-offset:1px; }
   .vc.more { border-color:var(--divider-color); color:var(--secondary-text-color); }
-  button.vc.more { font:inherit; font-size:9.5px; line-height:13px; cursor:pointer; background:var(--card-background-color); }
+  button.vc.more { font:inherit; font-size:calc(9.5px * var(--fs, 1)); line-height:calc(13px * var(--fs, 1)); cursor:pointer; background:var(--card-background-color); }
   button.vc.more:hover { border-color:var(--primary-color); color:var(--primary-color); }
   button.vc.more:focus-visible { outline:2px solid var(--primary-color); outline-offset:1px; }
   .elabel.open { z-index:3; }
@@ -837,7 +874,7 @@ const STYLE = `
   .node.vmatch .ring { box-shadow:0 0 0 3px color-mix(in srgb, var(--primary-color) 35%, transparent); }
   .vlans { display:flex; flex-wrap:wrap; gap:6px; align-items:center; padding:8px 16px; border-bottom:1px solid var(--divider-color); }
   .vlabel { font-size:11px; letter-spacing:.06em; text-transform:uppercase; color:var(--secondary-text-color); margin-right:2px; }
-  .vchip { display:inline-flex; align-items:center; gap:5px; font:inherit; font-size:11.5px; padding:3px 8px 3px 6px; border-radius:12px;
+  .vchip { display:inline-flex; align-items:center; gap:5px; font:inherit; font-size:calc(11.5px * var(--fs, 1)); padding:3px 8px 3px 6px; border-radius:12px;
     cursor:pointer; border:1px solid var(--divider-color); background:var(--card-background-color); color:var(--primary-text-color);
     font-variant-numeric:tabular-nums; }
   .vchip i { width:9px; height:9px; border-radius:50%; background:var(--c); }
@@ -850,7 +887,7 @@ const STYLE = `
   .group { position:absolute; border-radius:12px; background:var(--card-background-color);
     border:1px solid var(--divider-color); box-shadow:0 1px 3px rgba(0,0,0,.08); }
   .glabel { position:absolute; z-index:1; top:11px; left:14px; max-width:calc(100% - 28px); display:flex; align-items:center; gap:5px;
-    font-size:12px; line-height:16px; color:var(--primary-color); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+    font-size:calc(12px * var(--fs, 1)); line-height:calc(16px * var(--fs, 1)); color:var(--primary-color); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
     background:var(--card-background-color); padding-right:4px; /* sits above connector lines entering the box */ }
   .glabel ha-icon { --mdc-icon-size:16px; }
   .node { position:absolute; z-index:1; width:${CHIP_W}px; height:${CHIP_H}px; display:flex; align-items:center; gap:10px;
@@ -895,7 +932,7 @@ const STYLE = `
   .ring.g-ap { background:var(--card-background-color); }
   .pgraphic img.photo { display:block; margin:0 auto; max-width:100%; max-height:170px; object-fit:contain; }
   .pgraphic.ap img.photo { max-height:150px; }
-  .sublabel { font-size:11px; color:var(--secondary-text-color); text-align:left; margin:8px 0 4px; letter-spacing:.03em; text-transform:uppercase; }
+  .sublabel { font-size:calc(11px * var(--fs, 1)); color:var(--secondary-text-color); text-align:left; margin:8px 0 4px; letter-spacing:.03em; text-transform:uppercase; }
   .pgraphic svg.dev.switch { width:100%; height:auto; }
   .pgraphic svg.dev.ap { width:120px; height:auto; }
   .pgraphic svg.dev.gw { width:160px; height:auto; }
@@ -915,8 +952,8 @@ const STYLE = `
   .new.inline { position:static; margin-right:6px; }
   .newstat { color:var(--warning-color,#ffa600); font-weight:600; }
   .section { margin-top:10px; }
-  .role { font-size:12px; font-weight:600; margin-bottom:4px; }
-  .muted { color:var(--secondary-text-color); font-size:11px; }
+  .role { font-size:calc(12px * var(--fs, 1)); font-weight:600; margin-bottom:4px; }
+  .muted { color:var(--secondary-text-color); font-size:calc(11px * var(--fs, 1)); }
   table.svc td:first-child { font-family:var(--ovc-font-data, ui-monospace, monospace); }
   table.svc a { color:var(--primary-color); }
   .act { margin-top:8px; font:inherit; font-size:12px; padding:5px 10px; border-radius:6px; cursor:pointer;
@@ -931,8 +968,8 @@ const STYLE = `
   .badge { position:absolute; right:-6px; top:-6px; background:var(--primary-color); color:var(--text-primary-color,#fff);
     font-size:10px; min-width:16px; height:16px; line-height:16px; border-radius:8px; text-align:center; padding:0 3px; }
   .txt { min-width:0; flex:1; }
-  .name { font-size:13px; font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; color:var(--primary-text-color); }
-  .sub { font-size:11px; color:var(--secondary-text-color); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .name { font-size:calc(13px * var(--fs, 1)); font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; color:var(--primary-text-color); }
+  .sub { font-size:calc(11px * var(--fs, 1)); color:var(--secondary-text-color); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   .toggle { flex:0 0 auto; width:20px; height:20px; padding:0; border:1px solid var(--secondary-text-color); border-radius:4px;
     background:var(--card-background-color); color:var(--primary-text-color); cursor:pointer; line-height:16px; }
   .panel.wide { width:460px; }
@@ -942,7 +979,7 @@ const STYLE = `
   .ptitle { display:flex; align-items:center; gap:8px; margin-bottom:6px; }
   .ptitle b { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .close { border:none; background:none; font-size:20px; cursor:pointer; color:var(--secondary-text-color); }
-  table { width:100%; border-collapse:collapse; font-size:12px; }
+  table { width:100%; border-collapse:collapse; font-size:calc(12px * var(--fs, 1)); }
   td { padding:3px 4px; border-top:1px solid var(--divider-color); vertical-align:top; word-break:break-word; }
   td:first-child { color:var(--secondary-text-color); white-space:nowrap; width:1%; }
 `;

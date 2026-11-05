@@ -38,9 +38,11 @@ height: 640               # px
 refresh: 30               # seconds
 expand_clients: false     # start with AP client lists expanded
 max_columns: 3            # client chips per row inside an SSID box
+font_scale: 1             # text size multiplier (0.7-1.8); viewers can also use A− / A+
+show_vlans: true          # VLAN legend above the map
 ```
 
-Click a node for details, use **+ / −** on a node to expand or collapse it, and the zoom buttons (or **fit**) to size the map.
+Click a node for details, use **+ / −** on a node to expand or collapse it, and the zoom buttons (or **fit**) to size the map. **A− / A+** change the text size. The choice is remembered per browser, and boxes resize to fit.
 
 ## Device identification
 
@@ -121,3 +123,7 @@ Options → *Tracked clients* lets you pick which wireless clients get a `device
 - Cirrus requires `X-Requested-With`, `Origin` and `Referer` headers on API calls. The client sends them.
 - The Cirrus *wired/UNP sessions* API only lists clients that authenticate through UNP, which is why wired clients come from switch MAC tables instead.
 - Diagnostics (Settings → device → *Download diagnostics*) redact the application secret and user names.
+
+## Licence
+
+MIT. See [LICENSE](LICENSE).
