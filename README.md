@@ -129,6 +129,18 @@ Options → *Tracked clients* lets you pick which wireless clients get a `device
 - The Cirrus *wired/UNP sessions* API only lists clients that authenticate through UNP, which is why wired clients come from switch MAC tables instead.
 - Diagnostics (Settings → device → *Download diagnostics*) redact the application secret and user names.
 
+## Releases
+
+Versions follow `MAJOR.MINOR.PATCH`. HACS shows the version from GitHub releases and offers updates when a new one is published. To publish one:
+
+```bash
+scripts/release.sh            # next patch version, e.g. 0.2.1 -> 0.2.2
+scripts/release.sh minor      # 0.2.1 -> 0.3.0
+scripts/release.sh 0.4.0      # a specific version
+```
+
+The script updates `manifest.json` and the card's cache-busting version, then commits, tags, pushes and creates the GitHub release with generated notes. It needs the GitHub CLI (`gh`) logged in.
+
 ## Licence
 
 MIT. See [LICENSE](LICENSE).
