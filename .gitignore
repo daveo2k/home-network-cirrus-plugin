@@ -9,3 +9,6 @@ venv/
 # local test data / credentials must never be committed
 *.env
 secrets.yaml
+
+# local dev tools, fixtures with personal network data
+.dev/
