@@ -687,7 +687,8 @@ class OvCirrusNetworkMap extends HTMLElement {
             (this._selected === n.id ? " selected" : "") +
             (sv !== null && n.vlan ? (String(n.vlan) === String(sv) ? " vmatch" : " dim") : "");
           const big = BIG_KINDS.has(n.kind) ? " big" : "";
-          return `<div class="node ${esc(n.kind)}${big}${sel}" data-id="${esc(n.id)}" style="left:${n._x}px;top:${n._y}px;width:${n._rw || n._cw}px;height:${n._ch || CHIP_H}px">
+          const square = n.graphic?.type === "switch" ? " square" : ""; // rounded-square icon (switches)
+          return `<div class="node ${esc(n.kind)}${big}${square}${sel}" data-id="${esc(n.id)}" style="left:${n._x}px;top:${n._y}px;width:${n._rw || n._cw}px;height:${n._ch || CHIP_H}px;--rs:${ringSize(n)}px">
               <div class="ring ${esc(n.status)} ${n.graphic ? "g-" + esc(n.graphic.type) : ""}"${big ? ` style="--rs:${ringSize(n)}px;--bs:${Math.round(16 * DEVICE_SCALE)}px"` : ""}>${n.graphic ? deviceGraphic(n, true) : `<ha-icon icon="${esc(n.icon)}"></ha-icon>`}${badge}</div>
               <div class="txt"><div class="name" title="${esc(n.name)}">${esc(n.name)}</div>
               <div class="sub" title="${esc(n.subtitle)}">${esc(n.subtitle)}</div></div>${toggle}</div>`;
@@ -1408,6 +1409,9 @@ const STYLE = `
     background:var(--card-background-color); color:var(--primary-text-color); }
   form.edit .row { display:flex; flex-wrap:wrap; gap:6px; }
   .node.big { border-radius:999px; gap:14px; }
+  /* Square device icons get a rounded-rectangle highlight whose corners follow the icon (radius + padding). */
+  .node.square { border-radius:calc(var(--rs) * 0.24 + 7px); }
+  .node.square:not(.big) { border-radius:16px; }
   .node.big .ring { width:var(--rs); height:var(--rs); border-width:3px; }
   .node.big .ring ha-icon { --mdc-icon-size:calc(var(--rs) * 0.52); }
   .node.big .ring svg.mini { width:calc(var(--rs) * 0.72); height:calc(var(--rs) * 0.72); }
