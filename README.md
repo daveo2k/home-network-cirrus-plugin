@@ -38,11 +38,11 @@ height: 640               # px
 refresh: 30               # seconds
 expand_clients: false     # start with AP client lists expanded
 max_columns: 3            # client chips per row inside an SSID box
-font_scale: 1             # text size multiplier (0.7-1.8); viewers can also use A− / A+
+font_scale: 1             # map text size multiplier (0.7-1.8); viewers can also use A− / A+
 show_vlans: true          # VLAN legend above the map
 ```
 
-Click a node for details, use **+ / −** on a node to expand or collapse it, and the zoom buttons (or **fit**) to size the map. **A− / A+** change the text size. The choice is remembered per browser, and boxes resize to fit.
+Click a node for details, use **+ / −** on a node to expand or collapse it, and the zoom buttons (or **fit**) to size the map. **A− / A+** change the size of the text on the map (not the header, VLAN bar or details panel). The choice is remembered per browser, and boxes resize to fit.
 
 ## Device identification
 

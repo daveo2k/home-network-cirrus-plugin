@@ -3,7 +3,7 @@
  * type: custom:ovcirrus-network-map
  * Options: entry_id, site (id or name), refresh (s, default 30), expand_clients (bool),
  *          max_columns (default 3), height (px, default 640), title,
- *          font_scale (text size multiplier, default 1; viewers can change it with A− / A+)
+ *          font_scale (map text size multiplier, default 1; viewers can change it with A− / A+)
  */
 const CHIP_W = 210; // minimum device box width
 const MAX_CHIP_W = 380; // boxes grow to fit their text up to this (times the text size), then ellipsis
@@ -591,7 +591,7 @@ class OvCirrusNetworkMap extends HTMLElement {
       this._fitZoom = zoom;
       this._lastZoom = zoom;
       body = `<div class="sizer" style="width:${W * zoom}px;height:${H * zoom}px">
-          <div class="canvas" style="width:${W}px;height:${H}px;transform:scale(${zoom})">
+          <div class="canvas" style="width:${W}px;height:${H}px;transform:scale(${zoom});--fs:${this._fs || 1}">
             ${groups}<svg width="${W}" height="${H}">${edges}</svg>
             ${labels.map((l) => `<div class="elabel${l.dim ? " dim" : ""}${l.open ? " open" : ""}" data-gid="${esc(l.gid || "")}" style="left:${l.x}px;top:${l.y}px">${l.html}</div>`).join("")}${nodes}
           </div></div>`;
@@ -679,14 +679,12 @@ class OvCirrusNetworkMap extends HTMLElement {
            ${servicesBlock}${editBlock}</div>`
       : "";
 
-    // Text size lives on the host element so it inherits into everything in the shadow DOM.
-    this.style.setProperty("--fs", String(this._fs || 1));
     this.shadowRoot.innerHTML = `<style>${STYLE}</style>
       <ha-card>
         <div class="header">
           <div class="title">${esc(cfg.title || "Network map")}</div>${siteSel}
           <div class="stats">${stats}</div>
-          <div class="zoom"><button data-font="-" title="Smaller text" aria-label="Smaller text">A−</button><button data-font="+" title="Larger text" aria-label="Larger text">A+</button><span class="sep"></span><button data-zoom="-" title="Zoom out">−</button><button data-zoom="fit" title="Fit to width">fit</button><button data-zoom="+" title="Zoom in">+</button></div>
+          <div class="zoom"><button data-font="-" title="Smaller map text" aria-label="Smaller map text">A−</button><button data-font="+" title="Larger map text" aria-label="Larger map text">A+</button><span class="sep"></span><button data-zoom="-" title="Zoom out">−</button><button data-zoom="fit" title="Fit to width">fit</button><button data-zoom="+" title="Zoom in">+</button></div>
         </div>${warn}${
           site && Object.keys(site.vlans || {}).length && cfg.show_vlans !== false
             ? `<div class="vlans"><span class="vlabel">VLANs</span>${Object.entries(site.vlans)
@@ -874,7 +872,7 @@ const STYLE = `
   .node.vmatch .ring { box-shadow:0 0 0 3px color-mix(in srgb, var(--primary-color) 35%, transparent); }
   .vlans { display:flex; flex-wrap:wrap; gap:6px; align-items:center; padding:8px 16px; border-bottom:1px solid var(--divider-color); }
   .vlabel { font-size:11px; letter-spacing:.06em; text-transform:uppercase; color:var(--secondary-text-color); margin-right:2px; }
-  .vchip { display:inline-flex; align-items:center; gap:5px; font:inherit; font-size:calc(11.5px * var(--fs, 1)); padding:3px 8px 3px 6px; border-radius:12px;
+  .vchip { display:inline-flex; align-items:center; gap:5px; font:inherit; font-size:11.5px; padding:3px 8px 3px 6px; border-radius:12px;
     cursor:pointer; border:1px solid var(--divider-color); background:var(--card-background-color); color:var(--primary-text-color);
     font-variant-numeric:tabular-nums; }
   .vchip i { width:9px; height:9px; border-radius:50%; background:var(--c); }
@@ -932,7 +930,7 @@ const STYLE = `
   .ring.g-ap { background:var(--card-background-color); }
   .pgraphic img.photo { display:block; margin:0 auto; max-width:100%; max-height:170px; object-fit:contain; }
   .pgraphic.ap img.photo { max-height:150px; }
-  .sublabel { font-size:calc(11px * var(--fs, 1)); color:var(--secondary-text-color); text-align:left; margin:8px 0 4px; letter-spacing:.03em; text-transform:uppercase; }
+  .sublabel { font-size:11px; color:var(--secondary-text-color); text-align:left; margin:8px 0 4px; letter-spacing:.03em; text-transform:uppercase; }
   .pgraphic svg.dev.switch { width:100%; height:auto; }
   .pgraphic svg.dev.ap { width:120px; height:auto; }
   .pgraphic svg.dev.gw { width:160px; height:auto; }
@@ -952,8 +950,8 @@ const STYLE = `
   .new.inline { position:static; margin-right:6px; }
   .newstat { color:var(--warning-color,#ffa600); font-weight:600; }
   .section { margin-top:10px; }
-  .role { font-size:calc(12px * var(--fs, 1)); font-weight:600; margin-bottom:4px; }
-  .muted { color:var(--secondary-text-color); font-size:calc(11px * var(--fs, 1)); }
+  .role { font-size:12px; font-weight:600; margin-bottom:4px; }
+  .muted { color:var(--secondary-text-color); font-size:11px; }
   table.svc td:first-child { font-family:var(--ovc-font-data, ui-monospace, monospace); }
   table.svc a { color:var(--primary-color); }
   .act { margin-top:8px; font:inherit; font-size:12px; padding:5px 10px; border-radius:6px; cursor:pointer;
@@ -979,7 +977,7 @@ const STYLE = `
   .ptitle { display:flex; align-items:center; gap:8px; margin-bottom:6px; }
   .ptitle b { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .close { border:none; background:none; font-size:20px; cursor:pointer; color:var(--secondary-text-color); }
-  table { width:100%; border-collapse:collapse; font-size:calc(12px * var(--fs, 1)); }
+  table { width:100%; border-collapse:collapse; font-size:12px; }
   td { padding:3px 4px; border-top:1px solid var(--divider-color); vertical-align:top; word-break:break-word; }
   td:first-child { color:var(--secondary-text-color); white-space:nowrap; width:1%; }
 `;
