@@ -34,6 +34,7 @@ const BUNDLE_STEP = 16; // spacing between parallel link lines
 // Devices drawn at device_scale (default 2x); wireless clients and the Internet node stay normal size.
 const BIG_KINDS = new Set(["gateway", "switch", "ap", "bridge", "endpoint", "manual"]);
 let DEVICE_SCALE = 2;
+const DS_MIN = 1, DS_MAX = 3, DS_STEP = 0.25, DS_KEY = "ovcirrus-device-scale";
 const ringSize = (n) => (BIG_KINDS.has(n.kind) ? Math.round(42 * DEVICE_SCALE) : 42);
 const chipH = (n) => (BIG_KINDS.has(n.kind) ? Math.max(CHIP_H, ringSize(n) + 14) : CHIP_H);
 
@@ -240,6 +241,13 @@ class OvCirrusNetworkMap extends HTMLElement {
     }
     this._snap = snap === null ? this._config.snap_to_grid !== false : snap === "1";
     this._grid = Math.max(5, Math.min(100, Number(this._config.grid_size) || 20));
+    let storedDs = null;
+    try {
+      storedDs = Number(localStorage.getItem(DS_KEY)) || null;
+    } catch (e) {
+      storedDs = null;
+    }
+    this._ds = Math.min(DS_MAX, Math.max(DS_MIN, storedDs || Number(this._config.device_scale) || 2));
     this._applyFill();
     let stored = null;
     try {
@@ -582,7 +590,7 @@ class OvCirrusNetworkMap extends HTMLElement {
         n.groups.forEach((g) => g.children.forEach(walk));
       };
       walk(root);
-      DEVICE_SCALE = Math.min(3, Math.max(1, Number(cfg.device_scale) || 2));
+      DEVICE_SCALE = this._ds || 2;
       for (const n of this._index.values()) {
         n._ch = chipH(n);
         n._cw = this._chipWidth(n);
@@ -675,7 +683,7 @@ class OvCirrusNetworkMap extends HTMLElement {
             (sv !== null && n.vlan ? (String(n.vlan) === String(sv) ? " vmatch" : " dim") : "");
           const big = BIG_KINDS.has(n.kind) ? " big" : "";
           return `<div class="node ${esc(n.kind)}${big}${sel}" data-id="${esc(n.id)}" style="left:${n._x}px;top:${n._y}px;width:${n._rw || n._cw}px;height:${n._ch || CHIP_H}px">
-              <div class="ring ${esc(n.status)} ${n.graphic ? "g-" + esc(n.graphic.type) : ""}"${big ? ` style="--rs:${ringSize(n)}px"` : ""}>${n.graphic ? deviceGraphic(n, true) : `<ha-icon icon="${esc(n.icon)}"></ha-icon>`}${badge}</div>
+              <div class="ring ${esc(n.status)} ${n.graphic ? "g-" + esc(n.graphic.type) : ""}"${big ? ` style="--rs:${ringSize(n)}px;--bs:${Math.round(16 * DEVICE_SCALE)}px"` : ""}>${n.graphic ? deviceGraphic(n, true) : `<ha-icon icon="${esc(n.icon)}"></ha-icon>`}${badge}</div>
               <div class="txt"><div class="name" title="${esc(n.name)}">${esc(n.name)}</div>
               <div class="sub" title="${esc(n.subtitle)}">${esc(n.subtitle)}</div></div>${toggle}</div>`;
         })
@@ -852,7 +860,11 @@ class OvCirrusNetworkMap extends HTMLElement {
                     : `${this._isAdmin ? `<button data-layout="add" title="Add a server or other wired device to the map">+ Add device</button>` : ""}<button data-layout="edit" title="Drag devices to rearrange the map">Edit layout</button>`
                 }</div>`
               : ""
-          }<div class="zoom"><button data-font="-" title="Smaller map text" aria-label="Smaller map text">A−</button><button data-font="+" title="Larger map text" aria-label="Larger map text">A+</button><span class="sep"></span><button data-zoom="-" title="Zoom out">−</button><button data-zoom="fit" title="Fit to width">fit</button><button data-zoom="+" title="Zoom in">+</button></div>
+          }<div class="zoom">
+            <span class="grp" title="Map text size"><button data-font="-" title="Smaller map text" aria-label="Smaller map text">A−</button><button data-font="+" title="Larger map text" aria-label="Larger map text">A+</button></span>
+            <span class="grp" title="Device size: ${this._ds}×"><ha-icon icon="mdi:access-point"></ha-icon><button data-dsize="-" title="Smaller devices and client counts" aria-label="Smaller devices">−</button><button data-dsize="+" title="Larger devices and client counts" aria-label="Larger devices">+</button></span>
+            <span class="grp" title="Zoom"><ha-icon icon="mdi:magnify"></ha-icon><button data-zoom="-" title="Zoom out" aria-label="Zoom out">−</button><button data-zoom="fit" title="Fit to width">fit</button><button data-zoom="+" title="Zoom in" aria-label="Zoom in">+</button></span>
+          </div>
         </div>${warn}${
           site && Object.keys(site.vlans || {}).length && cfg.show_vlans !== false
             ? `<div class="vlans"><span class="vlabel">VLANs</span>${Object.entries(site.vlans)
@@ -1153,6 +1165,18 @@ class OvCirrusNetworkMap extends HTMLElement {
       save(form.dataset.edit, root.getElementById("ovc-name").value, root.getElementById("ovc-type").value);
     });
     root.querySelector("[data-reset]")?.addEventListener("click", () => save(form.dataset.edit, null, null));
+    root.querySelectorAll("[data-dsize]").forEach((b) =>
+      b.addEventListener("click", () => {
+        const step = b.dataset.dsize === "+" ? DS_STEP : -DS_STEP;
+        this._ds = Math.min(DS_MAX, Math.max(DS_MIN, (this._ds || 2) + step));
+        try {
+          localStorage.setItem(DS_KEY, String(this._ds));
+        } catch (e) {
+          // storage blocked: the size still applies until the page reloads
+        }
+        this._render();
+      })
+    );
     root.querySelectorAll("[data-font]").forEach((b) =>
       b.addEventListener("click", () => {
         const step = b.dataset.font === "+" ? 0.1 : -0.1;
@@ -1210,7 +1234,13 @@ const STYLE = `
   select.site { background:transparent; border:1px solid var(--divider-color); border-radius:6px; padding:2px 6px; color:var(--primary-text-color); }
   .stats { display:flex; gap:12px; margin-left:auto; color:var(--secondary-text-color); }
   .stat { display:flex; align-items:center; gap:4px; } .stat ha-icon { --mdc-icon-size:18px; }
-  .zoom { display:flex; align-items:center; }
+  .zoom { display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
+  .zoom .grp { display:inline-flex; align-items:center; gap:2px; padding:2px 3px 2px 6px; border:1px solid var(--divider-color);
+    border-radius:8px; color:var(--secondary-text-color); }
+  .zoom .grp:first-child { padding-left:3px; }
+  .zoom .grp ha-icon { --mdc-icon-size:16px; margin-right:2px; }
+  .zoom .grp button { margin-left:0; border-color:transparent; }
+  .zoom .grp button:hover { border-color:var(--divider-color); }
   .layout { display:flex; align-items:center; gap:4px; }
   .canvas.grid { background-image:radial-gradient(circle, color-mix(in srgb, var(--secondary-text-color) 45%, transparent) 1px, transparent 1.3px);
     background-size:var(--grid) var(--grid); background-position:0 0; }
@@ -1222,6 +1252,8 @@ const STYLE = `
     outline-offset:2px; }
   .node.dragging { cursor:grabbing; z-index:5; box-shadow:0 6px 18px rgba(0,0,0,.18); background:var(--card-background-color); }
   .zoom .sep { width:8px; }
+  .zoom .ctl { display:inline-flex; align-items:center; color:var(--secondary-text-color); margin-right:2px; }
+  .zoom .ctl ha-icon { --mdc-icon-size:18px; }
   .zoom button { border:1px solid var(--divider-color); background:var(--card-background-color); color:var(--primary-text-color);
     border-radius:6px; min-width:30px; height:26px; cursor:pointer; margin-left:2px; }
   .warn { background:var(--warning-color,#ffa600); color:#000; font-size:12px; padding:2px 16px; }
@@ -1368,9 +1400,10 @@ const STYLE = `
   .node.big .ring.g-switch { width:calc(var(--rs) * 1.1); border-radius:calc(var(--rs) * 0.24); }
   .node.big .ring.g-switch svg.mini { width:calc(var(--rs) * 0.95); height:calc(var(--rs) * 0.48); }
   .node.big .ring.g-switch img.photo-mini { width:calc(var(--rs) * 1); height:calc(var(--rs) * 0.7); }
-  .node.big .badge { font-size:16px; min-width:32px; height:32px; line-height:32px; border-radius:16px; right:-10px; top:-10px;
-    padding:0 6px; font-weight:600; box-shadow:0 1px 3px rgba(0,0,0,.25); }
-  .node.big .ring img.logo { width:26px; height:26px; right:-6px; bottom:-6px; }
+  .node.big .badge { font-size:calc(var(--bs) * 0.5); min-width:var(--bs); height:var(--bs); line-height:var(--bs);
+    border-radius:calc(var(--bs) / 2); right:calc(var(--bs) * -0.3); top:calc(var(--bs) * -0.3);
+    padding:0 calc(var(--bs) * 0.18); font-weight:600; box-shadow:0 1px 3px rgba(0,0,0,.25); }
+  .node.big .ring img.logo { width:calc(var(--bs) * 0.8); height:calc(var(--bs) * 0.8); right:-6px; bottom:-6px; }
   .node.big .new { font-size:11px; padding:2px 6px; left:-10px; top:-9px; }
   .badge { position:absolute; right:-6px; top:-6px; background:var(--primary-color); color:var(--text-primary-color,#fff);
     font-size:10px; min-width:16px; height:16px; line-height:16px; border-radius:8px; text-align:center; padding:0 3px; }

@@ -67,11 +67,11 @@ font_scale: 1             # map text size multiplier (0.7-1.8); viewers can also
 layout_editing: admin     # who can drag devices and save the layout: admin (default), true or false
 snap_to_grid: true        # snap dragged devices to a grid (viewers can toggle it in edit mode)
 grid_size: 20             # grid spacing in px
-device_scale: 2           # size of gateways, switches, APs and wired devices (1-3); wireless clients stay normal size
+device_scale: 2           # starting size of gateways, switches, APs and wired devices (1-3); viewers can change it; wireless clients stay normal size
 show_vlans: true          # VLAN legend above the map
 ```
 
-Click a node for details, use **+ / −** on a node to expand or collapse it, and the zoom buttons (or **fit**) to size the map. **A− / A+** change the size of the text on the map (not the header, VLAN bar or details panel).
+Click a node for details, use **+ / −** on a node to expand or collapse it, and the zoom buttons (or **fit**) to size the map. **A− / A+** change the size of the text on the map (not the header, VLAN bar or details panel). The **device size − / +** buttons (1× to 3×) scale device rings, photos, the AP client-count bubble and brand logos. Both settings are remembered per browser.
 
 **Edit layout** (admins) lets you drag switches, APs, gateways, wired and manual devices. Everything under a device moves with it, so an AP's wireless clients stay with their AP. Links, labels and boxes follow. Positions are saved in Home Assistant and shared by every dashboard. **Snap to grid** (on by default) aligns devices to a dot grid shown while editing; hold **Alt** while dragging to place a device freely. **Reset layout** returns to the automatic layout. The choice is remembered per browser, and boxes resize to fit.
 
