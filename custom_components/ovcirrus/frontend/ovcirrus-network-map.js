@@ -4,7 +4,8 @@
  * Options: entry_id, site (id or name), refresh (s, default 30), expand_clients (bool),
  *          max_columns (default 3), height (px, default 640), title,
  *          font_scale (map text size multiplier, default 1; viewers can change it with A− / A+),
- *          layout_editing ("admin" default, true, or false: who may drag devices and save the layout)
+ *          layout_editing ("admin" default, true, or false: who may drag devices and save the layout),
+ *          snap_to_grid (default true), grid_size (px, default 20)
  */
 const CHIP_W = 210; // minimum device box width
 const MAX_CHIP_W = 380; // boxes grow to fit their text up to this (times the text size), then ellipsis
@@ -29,6 +30,7 @@ function applyFontScale(fs) {
 const BUNDLE_STEP = 16; // spacing between parallel link lines
 
 // Devices that can be dragged: infrastructure, wired and manual devices. Wireless clients follow their AP.
+const SNAP_KEY = "ovcirrus-snap-to-grid";
 const DRAGGABLE = new Set(["gateway", "switch", "ap", "bridge", "endpoint", "manual", "wired"]);
 
 const esc = (s) =>
@@ -218,7 +220,18 @@ class OvCirrusNetworkMap extends HTMLElement {
   }
 
   setConfig(config) {
-    this._config = { refresh: 30, max_columns: 3, height: 640, expand_clients: false, font_scale: 1, layout_editing: "admin", ...config };
+    this._config = {
+      refresh: 30, max_columns: 3, height: 640, expand_clients: false, font_scale: 1,
+      layout_editing: "admin", snap_to_grid: true, grid_size: 20, ...config,
+    };
+    let snap = null;
+    try {
+      snap = localStorage.getItem(SNAP_KEY);
+    } catch (e) {
+      snap = null;
+    }
+    this._snap = snap === null ? this._config.snap_to_grid !== false : snap === "1";
+    this._grid = Math.max(5, Math.min(100, Number(this._config.grid_size) || 20));
     let stored = null;
     try {
       stored = Number(localStorage.getItem(FS_KEY)) || null;
@@ -494,8 +507,10 @@ class OvCirrusNetworkMap extends HTMLElement {
   _finalize(out) {
     const xs = [...out.nodes.map((n) => n._x), ...out.groups.map((g) => g._bx)];
     const ys = [...out.nodes.map((n) => n._y), ...out.groups.map((g) => g._y)];
-    const sx = Math.max(0, 20 - Math.min(...xs));
-    const sy = Math.max(0, 20 - Math.min(...ys));
+    // Shift in whole grid steps so devices snapped to the grid stay on it.
+    const g = this._grid || 20;
+    const sx = Math.max(0, Math.ceil((20 - Math.min(...xs)) / g) * g);
+    const sy = Math.max(0, Math.ceil((20 - Math.min(...ys)) / g) * g);
     if (sx || sy) {
       out.nodes.forEach((n) => ((n._x += sx), (n._y += sy)));
       out.groups.forEach((g) => ((g._bx += sx), (g._x += sx), (g._y += sy)));
@@ -647,7 +662,7 @@ class OvCirrusNetworkMap extends HTMLElement {
       this._fitZoom = zoom;
       this._lastZoom = zoom;
       body = `<div class="sizer" style="width:${W * zoom}px;height:${H * zoom}px">
-          <div class="canvas" style="width:${W}px;height:${H}px;transform:scale(${zoom});--fs:${this._fs || 1}">
+          <div class="canvas${this._editLayout && this._snap ? " grid" : ""}" style="width:${W}px;height:${H}px;transform:scale(${zoom});--fs:${this._fs || 1};--grid:${this._grid}px">
             ${groups}<svg width="${W}" height="${H}">${edges}</svg>
             ${labels.map((l) => `<div class="elabel${l.dim ? " dim" : ""}${l.open ? " open" : ""}" data-gid="${esc(l.gid || "")}" style="left:${l.x}px;top:${l.y}px">${l.html}</div>`).join("")}${nodes}
           </div></div>`;
@@ -744,7 +759,7 @@ class OvCirrusNetworkMap extends HTMLElement {
             this._canEditLayout()
               ? `<div class="layout">${
                   this._editLayout
-                    ? `<span class="hint">Drag devices to arrange the map</span><button data-layout="reset" title="Put every device back where it was drawn automatically">Reset layout</button><button data-layout="done" class="on">Done</button>`
+                    ? `<span class="hint">Drag devices to arrange the map${this._snap ? " (hold Alt to place freely)" : ""}</span><button data-layout="snap" class="${this._snap ? "on" : ""}" aria-pressed="${this._snap}" title="Snap devices to a ${this._grid}px grid">Snap to grid</button><button data-layout="reset" title="Put every device back where it was drawn automatically">Reset layout</button><button data-layout="done" class="on">Done</button>`
                     : `<button data-layout="edit" title="Drag devices to rearrange the map">Edit layout</button>`
                 }</div>`
               : ""
@@ -798,7 +813,11 @@ class OvCirrusNetworkMap extends HTMLElement {
   _startDrag(ev, id) {
     if (ev.button !== undefined && ev.button !== 0) return;
     const zoom = this._lastZoom || 1;
-    this._drag = { id, sx: ev.clientX, sy: ev.clientY, base: this._off(id), moved: false, zoom };
+    const node = this._index?.get(id);
+    this._drag = {
+      id, sx: ev.clientX, sy: ev.clientY, base: this._off(id), moved: false, zoom,
+      nx: node?._x ?? 0, ny: node?._y ?? 0, // where the device was drawn when the drag started
+    };
     const move = (e) => {
       const d = this._drag;
       if (!d) return;
@@ -806,7 +825,14 @@ class OvCirrusNetworkMap extends HTMLElement {
       const dy = (e.clientY - d.sy) / d.zoom;
       if (!d.moved && Math.hypot(dx, dy) < 4) return;
       d.moved = true;
-      this._offsets = { ...this._offsets, [d.id]: [d.base[0] + dx, d.base[1] + dy] };
+      let mx = dx, my = dy;
+      if (this._snap && !e.altKey) {
+        // Snap the device's top-left corner to the grid the canvas shows.
+        const g = this._grid;
+        mx = Math.round((d.nx + dx) / g) * g - d.nx;
+        my = Math.round((d.ny + dy) / g) * g - d.ny;
+      }
+      this._offsets = { ...this._offsets, [d.id]: [d.base[0] + mx, d.base[1] + my] };
       if (!this._raf) {
         this._raf = requestAnimationFrame(() => {
           this._raf = null;
@@ -865,6 +891,14 @@ class OvCirrusNetworkMap extends HTMLElement {
           this._zoom = this._zoom ?? this._fitZoom; // keep the scale steady while arranging
         }
         if (action === "done") this._editLayout = false;
+        if (action === "snap") {
+          this._snap = !this._snap;
+          try {
+            localStorage.setItem(SNAP_KEY, this._snap ? "1" : "0");
+          } catch (e) {
+            // storage blocked: the setting still applies until the page reloads
+          }
+        }
         if (action === "reset") {
           const site = this._sites?.[this._siteIdx];
           this._localOffsets = {};
@@ -985,6 +1019,8 @@ const STYLE = `
   .stat { display:flex; align-items:center; gap:4px; } .stat ha-icon { --mdc-icon-size:18px; }
   .zoom { display:flex; align-items:center; }
   .layout { display:flex; align-items:center; gap:4px; }
+  .canvas.grid { background-image:radial-gradient(circle, color-mix(in srgb, var(--secondary-text-color) 45%, transparent) 1px, transparent 1.3px);
+    background-size:var(--grid) var(--grid); background-position:0 0; }
   .layout .hint { font-size:12px; color:var(--secondary-text-color); margin-right:4px; }
   .layout button { border:1px solid var(--divider-color); background:var(--card-background-color); color:var(--primary-text-color);
     border-radius:6px; height:26px; padding:0 10px; cursor:pointer; font:inherit; font-size:12px; }
