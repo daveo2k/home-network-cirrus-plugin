@@ -5,7 +5,8 @@
  *          max_columns (default 3), height (px, default 640), title,
  *          font_scale (map text size multiplier, default 1; viewers can change it with A− / A+),
  *          layout_editing ("admin" default, true, or false: who may drag devices and save the layout),
- *          snap_to_grid (default true), grid_size (px, default 20)
+ *          snap_to_grid (default true), grid_size (px, default 20),
+ *          height: "fill" makes the map fill its container (used by the sidebar panel)
  */
 const CHIP_W = 210; // minimum device box width
 const MAX_CHIP_W = 380; // boxes grow to fit their text up to this (times the text size), then ellipsis
@@ -232,6 +233,7 @@ class OvCirrusNetworkMap extends HTMLElement {
     }
     this._snap = snap === null ? this._config.snap_to_grid !== false : snap === "1";
     this._grid = Math.max(5, Math.min(100, Number(this._config.grid_size) || 20));
+    this._applyFill();
     let stored = null;
     try {
       stored = Number(localStorage.getItem(FS_KEY)) || null;
@@ -243,6 +245,12 @@ class OvCirrusNetworkMap extends HTMLElement {
 
   static getStubConfig() {
     return {};
+  }
+
+  // Fill mode is set by the sidebar panel so the map takes the whole main pane.
+  _applyFill() {
+    if (this._config?.height === "fill") this.setAttribute("fill", "");
+    else this.removeAttribute("fill");
   }
 
   getCardSize() {
@@ -753,7 +761,7 @@ class OvCirrusNetworkMap extends HTMLElement {
     this.shadowRoot.innerHTML = `<style>${STYLE}</style>
       <ha-card>
         <div class="header">
-          <div class="title">${esc(cfg.title || "Network map")}</div>${siteSel}
+          ${cfg.title === false ? "" : `<div class="title">${esc(cfg.title || "Network map")}</div>`}${siteSel}
           <div class="stats">${stats}</div>
           ${
             this._canEditLayout()
@@ -774,7 +782,7 @@ class OvCirrusNetworkMap extends HTMLElement {
                 .join("")}${this._vlan != null ? `<button class="vchip clear" data-vlan="">Clear</button>` : ""}</div>`
             : ""
         }
-        <div class="viewport" style="height:${cfg.height}px">${this._error && !site ? `<div class="empty">${esc(this._error)}</div>` : body}</div>
+        <div class="viewport" style="${cfg.height === "fill" ? "" : `height:${cfg.height}px`}">${this._error && !site ? `<div class="empty">${esc(this._error)}</div>` : body}</div>
         ${panel}
       </ha-card>`;
 
@@ -1010,6 +1018,9 @@ class OvCirrusNetworkMap extends HTMLElement {
 const STYLE = `
   :host { display:block; }
   ha-card { overflow:hidden; position:relative; }
+  :host([fill]) { height:100%; }
+  :host([fill]) ha-card { height:100%; display:flex; flex-direction:column; border-radius:0; border:none; box-shadow:none; }
+  :host([fill]) .viewport { flex:1 1 auto; min-height:0; }
   .header { display:flex; align-items:center; gap:12px; padding:12px 16px; flex-wrap:wrap;
     border-bottom:1px solid var(--divider-color); }
   .title { font-size:1.1em; font-weight:500; }
@@ -1172,6 +1183,62 @@ const STYLE = `
   td { padding:3px 4px; border-top:1px solid var(--divider-color); vertical-align:top; word-break:break-word; }
   td:first-child { color:var(--secondary-text-color); white-space:nowrap; width:1%; }
 `;
+
+// ---------- sidebar panel: the map full screen in the main pane ----------
+class OvCirrusNetworkPanel extends HTMLElement {
+  constructor() {
+    super();
+    this.attachShadow({ mode: "open" });
+  }
+
+  set hass(hass) {
+    this._hass = hass;
+    this._build();
+    if (this._card) this._card.hass = hass;
+    if (this._menu) this._menu.hass = hass;
+  }
+
+  set narrow(narrow) {
+    this._narrow = narrow;
+    if (this._menu) this._menu.narrow = narrow;
+  }
+
+  set panel(panel) {
+    this._panel = panel;
+    if (this._titleEl) this._titleEl.textContent = panel?.config?.title || "Network";
+  }
+
+  set route(_route) {}
+
+  _build() {
+    if (this._card || !this._hass) return;
+    this.shadowRoot.innerHTML = `<style>
+      :host { display:flex; flex-direction:column; height:100%; background:var(--primary-background-color); }
+      .toolbar { display:flex; align-items:center; gap:4px; height:var(--header-height, 56px); padding:0 12px 0 4px;
+        box-sizing:border-box; flex:0 0 auto; background:var(--app-header-background-color, var(--primary-color));
+        color:var(--app-header-text-color, var(--text-primary-color, #fff));
+        border-bottom:var(--app-header-border-bottom, none); font-size:20px; font-weight:400; }
+      .title { margin-left:12px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+      .body { flex:1 1 auto; min-height:0; }
+      ovcirrus-network-map { height:100%; }
+    </style>
+    <div class="toolbar"><ha-menu-button></ha-menu-button><div class="title"></div></div>
+    <div class="body"></div>`;
+    this._menu = this.shadowRoot.querySelector("ha-menu-button");
+    this._menu.hass = this._hass;
+    this._menu.narrow = this._narrow;
+    this._titleEl = this.shadowRoot.querySelector(".title");
+    this._titleEl.textContent = this._panel?.config?.title || "Network";
+    this._card = document.createElement("ovcirrus-network-map");
+    this._card.setConfig({ ...(this._panel?.config?.card || {}), height: "fill", title: false });
+    this.shadowRoot.querySelector(".body").appendChild(this._card);
+    this._card.hass = this._hass;
+  }
+}
+
+if (!customElements.get("ovcirrus-network-panel")) {
+  customElements.define("ovcirrus-network-panel", OvCirrusNetworkPanel);
+}
 
 if (!customElements.get("ovcirrus-network-map")) {
   customElements.define("ovcirrus-network-map", OvCirrusNetworkMap);

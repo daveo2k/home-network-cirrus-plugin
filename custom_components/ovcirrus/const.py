@@ -65,3 +65,11 @@ DEFAULT_DISCOVERY_INTERVAL = 24
 EVENT_NEW_CLIENT = "ovcirrus_new_client"
 CACHE_DIR = "ovcirrus_cache"
 CACHE_URL = "/ovcirrus_cache"
+
+# Sidebar panel with the full-screen network map
+CONF_SHOW_PANEL = "show_panel"
+CONF_PANEL_TITLE = "panel_title"
+CONF_PANEL_ADMIN = "panel_admin_only"
+DEFAULT_PANEL_TITLE = "Network"
+PANEL_URL_PATH = "ovcirrus-network"
+PANEL_ELEMENT = "ovcirrus-network-panel"

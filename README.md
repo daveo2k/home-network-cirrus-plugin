@@ -26,6 +26,10 @@ The map is built from:
 
 Inferred links (from MAC tables rather than LLDP) are dashed. Cirrus does not report the WAN link, so *Internet* is always drawn.
 
+### Network map in the sidebar
+
+The setup wizard's last step adds **Network** to Home Assistant's sidebar: a full-screen page with just the map, so you don't need to build a dashboard. Change the title, restrict it to administrators, or turn it off under the integration's **Configure** → **General**.
+
 ### Adding the map to a dashboard
 
 The card is registered automatically when the integration loads; there is no resource to add.

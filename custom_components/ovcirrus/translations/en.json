@@ -41,6 +41,15 @@
           "app_id": "Application ID",
           "app_secret": "Application secret"
         }
+      },
+      "panel": {
+        "title": "Network map in the sidebar",
+        "description": "Add the network map to Home Assistant's sidebar as its own full-screen page. No dashboard needed. You can change this later in the integration options.",
+        "data": {
+          "show_panel": "Show the network map in the sidebar",
+          "panel_title": "Sidebar title",
+          "panel_admin_only": "Only show it to administrators"
+        }
       }
     },
     "error": {
@@ -61,7 +70,7 @@
       "init": {
         "title": "OmniVista Cirrus options",
         "menu_options": {
-          "general": "Polling",
+          "general": "General (polling, sidebar)",
           "clients": "Tracked clients (presence)",
           "ssh": "Switch MAC tables (SSH)",
           "dns": "Reverse DNS names",
@@ -70,10 +79,13 @@
         }
       },
       "general": {
-        "title": "Polling",
+        "title": "General",
         "data": {
           "scan_interval": "Cirrus poll interval",
-          "discovery_interval_hours": "Re-scan services of manual devices every"
+          "discovery_interval_hours": "Re-scan services of manual devices every",
+          "show_panel": "Show the network map in the sidebar",
+          "panel_title": "Sidebar title",
+          "panel_admin_only": "Only show it to administrators"
         }
       },
       "clients": {

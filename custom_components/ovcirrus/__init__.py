@@ -19,7 +19,15 @@ from homeassistant.helpers.typing import ConfigType
 
 from .api import CirrusClient
 from .assets import AssetCache
+from homeassistant.components import panel_custom
+
 from .const import (
+    CONF_PANEL_ADMIN,
+    CONF_PANEL_TITLE,
+    CONF_SHOW_PANEL,
+    DEFAULT_PANEL_TITLE,
+    PANEL_ELEMENT,
+    PANEL_URL_PATH,
     CACHE_DIR,
     CACHE_URL,
     CARD_URL,
@@ -122,13 +130,55 @@ async def async_setup_entry(hass: HomeAssistant, entry: CirrusConfigEntry) -> bo
     entry.runtime_data = coordinator
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     entry.async_on_unload(entry.add_update_listener(_async_reload))
+    await _async_update_panel(hass)
     return True
+
+
+async def _async_update_panel(hass: HomeAssistant, unloading: str | None = None) -> None:
+    """Show the full-screen map in the sidebar if any loaded entry asks for it."""
+    wanted = [
+        e
+        for e in hass.config_entries.async_entries(DOMAIN)
+        if e.entry_id != unloading
+        and e.state is ConfigEntryState.LOADED
+        and e.options.get(CONF_SHOW_PANEL, True)
+    ]
+    data = hass.data.setdefault(DOMAIN, {})
+    current = data.get("panel")
+    desired = None
+    if wanted:
+        first = wanted[0]
+        desired = (
+            first.options.get(CONF_PANEL_TITLE) or DEFAULT_PANEL_TITLE,
+            bool(first.options.get(CONF_PANEL_ADMIN, False)),
+        )
+    if current == desired:
+        return
+    if current is not None:
+        frontend.async_remove_panel(hass, PANEL_URL_PATH)
+        data["panel"] = None
+    if desired is None:
+        return
+    title, admin_only = desired
+    await panel_custom.async_register_panel(
+        hass,
+        frontend_url_path=PANEL_URL_PATH,
+        webcomponent_name=PANEL_ELEMENT,
+        module_url=f"{CARD_URL}?v={VERSION}",
+        sidebar_title=title,
+        sidebar_icon="mdi:lan",
+        require_admin=admin_only,
+        config={"title": title},
+        embed_iframe=False,
+    )
+    data["panel"] = desired
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: CirrusConfigEntry) -> bool:
     unloaded = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if unloaded:
         await entry.runtime_data.async_shutdown()
+        await _async_update_panel(hass, unloading=entry.entry_id)
     return unloaded
 
 

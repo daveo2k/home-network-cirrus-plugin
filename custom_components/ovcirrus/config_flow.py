@@ -28,6 +28,10 @@ from homeassistant.helpers.selector import (
 
 from .api import CirrusApiError, CirrusAuthError, CirrusClient
 from .const import (
+    CONF_PANEL_ADMIN,
+    CONF_PANEL_TITLE,
+    CONF_SHOW_PANEL,
+    DEFAULT_PANEL_TITLE,
     CONF_DISCOVERY_INTERVAL,
     CONF_MANUAL_DEVICES,
     CONF_UNIFI_ENABLED,
@@ -283,6 +287,22 @@ async def _test_ssh(data: dict, switches: dict[str, dict]) -> tuple[str | None, 
     return None, {}
 
 
+def _panel_schema(defaults: Mapping[str, Any]) -> dict:
+    return {
+        vol.Required(CONF_SHOW_PANEL, default=defaults.get(CONF_SHOW_PANEL, True)): BooleanSelector(),
+        vol.Optional(CONF_PANEL_TITLE, default=defaults.get(CONF_PANEL_TITLE, DEFAULT_PANEL_TITLE)): TextSelector(),
+        vol.Optional(CONF_PANEL_ADMIN, default=defaults.get(CONF_PANEL_ADMIN, False)): BooleanSelector(),
+    }
+
+
+def _panel_options(user_input: Mapping[str, Any]) -> dict:
+    return {
+        CONF_SHOW_PANEL: bool(user_input.get(CONF_SHOW_PANEL, True)),
+        CONF_PANEL_TITLE: (user_input.get(CONF_PANEL_TITLE) or DEFAULT_PANEL_TITLE).strip(),
+        CONF_PANEL_ADMIN: bool(user_input.get(CONF_PANEL_ADMIN, False)),
+    }
+
+
 class CirrusConfigFlow(ConfigFlow, domain=DOMAIN):
     """Handle a config flow."""
 
@@ -295,6 +315,7 @@ class CirrusConfigFlow(ConfigFlow, domain=DOMAIN):
         self._sites: list[dict] = []
         self._devices: list[dict] = []
         self._switches: dict[str, dict] | None = None
+        self._options: dict[str, Any] = {}
 
     async def async_step_user(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         errors: dict[str, str] = {}
@@ -401,14 +422,21 @@ class CirrusConfigFlow(ConfigFlow, domain=DOMAIN):
                 errors["base"] = error
                 placeholders.update(details)
             else:
-                options = {CONF_SCAN_INTERVAL: DEFAULT_SCAN_INTERVAL, CONF_TRACKED_CLIENTS: [], **data}
-                return self.async_create_entry(title=self._data[CONF_ORG_NAME], data=self._data, options=options)
+                self._options = {CONF_SCAN_INTERVAL: DEFAULT_SCAN_INTERVAL, CONF_TRACKED_CLIENTS: [], **data}
+                return await self.async_step_panel()
         return self.async_show_form(
             step_id="ssh",
             data_schema=_ssh_schema(user_input or {}, self._switches),
             errors=errors,
             description_placeholders={"switches": _switch_summary(self._switches), **placeholders},
         )
+
+    async def async_step_panel(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+        """Offer the full-screen network map as its own sidebar entry."""
+        if user_input is not None:
+            options = {**self._options, **_panel_options(user_input)}
+            return self.async_create_entry(title=self._data[CONF_ORG_NAME], data=self._data, options=options)
+        return self.async_show_form(step_id="panel", data_schema=_panel_schema({}))
 
     async def async_step_reauth(self, entry_data: Mapping[str, Any]) -> ConfigFlowResult:
         return await self.async_step_reauth_confirm()
@@ -469,6 +497,7 @@ class CirrusOptionsFlow(OptionsFlow):
                 {
                     CONF_SCAN_INTERVAL: int(user_input[CONF_SCAN_INTERVAL]),
                     CONF_DISCOVERY_INTERVAL: int(user_input[CONF_DISCOVERY_INTERVAL]),
+                    **_panel_options(user_input),
                 }
             )
         opts = self.config_entry.options
@@ -483,6 +512,7 @@ class CirrusOptionsFlow(OptionsFlow):
                         CONF_DISCOVERY_INTERVAL,
                         default=opts.get(CONF_DISCOVERY_INTERVAL, DEFAULT_DISCOVERY_INTERVAL),
                     ): NumberSelector(NumberSelectorConfig(min=1, max=168, step=1, unit_of_measurement="h")),
+                    **_panel_schema(opts),
                 }
             ),
         )
