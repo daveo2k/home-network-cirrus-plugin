@@ -91,6 +91,8 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     websocket_api.async_register_command(hass, ws_topology)
     websocket_api.async_register_command(hass, ws_set_override)
     websocket_api.async_register_command(hass, ws_discover)
+    websocket_api.async_register_command(hass, ws_set_position)
+    websocket_api.async_register_command(hass, ws_reset_positions)
     return True
 
 
@@ -194,6 +196,50 @@ def ws_set_override(hass: HomeAssistant, connection: websocket_api.ActiveConnect
         return
     coordinator.store.set_override(mac, (msg.get("name") or "").strip() or None, msg.get("dev_type"))
     coordinator.rebuild()
+    connection.send_result(msg["id"], {"ok": True})
+
+
+def _apply_positions(coordinator: CirrusCoordinator, site_id: str) -> None:
+    if coordinator.data and site_id in coordinator.data.maps:
+        coordinator.data.maps[site_id]["positions"] = dict(coordinator.store.positions.get(site_id, {}))
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "ovcirrus/set_position",
+        vol.Required("entry_id"): str,
+        vol.Required("site_id"): str,
+        vol.Required("node_id"): str,
+        vol.Required("dx"): vol.Coerce(float),
+        vol.Required("dy"): vol.Coerce(float),
+    }
+)
+@callback
+def ws_set_position(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict) -> None:
+    """Save where a device was dragged to on the map (shared by every dashboard)."""
+    coordinator = _coordinator(hass, msg["entry_id"])
+    if not coordinator:
+        connection.send_error(msg["id"], "not_found", "Unknown entry")
+        return
+    clamp = lambda v: max(-20000.0, min(20000.0, v))
+    coordinator.store.set_position(msg["site_id"], msg["node_id"], [clamp(msg["dx"]), clamp(msg["dy"])])
+    _apply_positions(coordinator, msg["site_id"])
+    connection.send_result(msg["id"], {"ok": True})
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command(
+    {vol.Required("type"): "ovcirrus/reset_positions", vol.Required("entry_id"): str, vol.Required("site_id"): str}
+)
+@callback
+def ws_reset_positions(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict) -> None:
+    coordinator = _coordinator(hass, msg["entry_id"])
+    if not coordinator:
+        connection.send_error(msg["id"], "not_found", "Unknown entry")
+        return
+    coordinator.store.reset_positions(msg["site_id"])
+    _apply_positions(coordinator, msg["site_id"])
     connection.send_result(msg["id"], {"ok": True})
 
 

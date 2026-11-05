@@ -22,6 +22,7 @@ class EntryStore:
         self.known: dict[str, dict] = {}
         self.overrides: dict[str, dict] = {}
         self.services: dict[str, dict] = {}
+        self.positions: dict[str, dict[str, list[float]]] = {}  # site_id -> node_id -> [dx, dy]
         self.baseline_done = False
 
     async def async_load(self) -> None:
@@ -29,6 +30,7 @@ class EntryStore:
         self.known = data.get("known", {})
         self.overrides = data.get("overrides", {})
         self.services = data.get("services", {})
+        self.positions = data.get("positions", {})
         self.baseline_done = data.get("baseline_done", False)
 
     def _data(self) -> dict:
@@ -36,6 +38,7 @@ class EntryStore:
             "known": self.known,
             "overrides": self.overrides,
             "services": self.services,
+            "positions": self.positions,
             "baseline_done": self.baseline_done,
         }
 
@@ -102,6 +105,19 @@ class EntryStore:
             self.overrides[mac] = entry
         else:
             self.overrides.pop(mac, None)
+        self.schedule_save()
+
+    def set_position(self, site_id: str, node_id: str, offset: list[float] | None) -> None:
+        """Offset of a node (and the devices under it) from its automatic position."""
+        site = self.positions.setdefault(site_id, {})
+        if offset is None or (abs(offset[0]) < 0.5 and abs(offset[1]) < 0.5):
+            site.pop(node_id, None)
+        else:
+            site[node_id] = [round(offset[0], 1), round(offset[1], 1)]
+        self.schedule_save()
+
+    def reset_positions(self, site_id: str) -> None:
+        self.positions.pop(site_id, None)
         self.schedule_save()
 
     def set_services(self, ip: str, result: dict) -> None:

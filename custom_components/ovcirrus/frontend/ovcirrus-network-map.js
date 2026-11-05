@@ -3,7 +3,8 @@
  * type: custom:ovcirrus-network-map
  * Options: entry_id, site (id or name), refresh (s, default 30), expand_clients (bool),
  *          max_columns (default 3), height (px, default 640), title,
- *          font_scale (map text size multiplier, default 1; viewers can change it with A− / A+)
+ *          font_scale (map text size multiplier, default 1; viewers can change it with A− / A+),
+ *          layout_editing ("admin" default, true, or false: who may drag devices and save the layout)
  */
 const CHIP_W = 210; // minimum device box width
 const MAX_CHIP_W = 380; // boxes grow to fit their text up to this (times the text size), then ellipsis
@@ -26,6 +27,9 @@ function applyFontScale(fs) {
   LABEL_ROW = Math.round(BASE.LABEL_ROW * Math.max(0.85, fs));
 }
 const BUNDLE_STEP = 16; // spacing between parallel link lines
+
+// Devices that can be dragged: infrastructure, wired and manual devices. Wireless clients follow their AP.
+const DRAGGABLE = new Set(["gateway", "switch", "ap", "bridge", "endpoint", "manual", "wired"]);
 
 const esc = (s) =>
   String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
@@ -214,7 +218,7 @@ class OvCirrusNetworkMap extends HTMLElement {
   }
 
   setConfig(config) {
-    this._config = { refresh: 30, max_columns: 3, height: 640, expand_clients: false, font_scale: 1, ...config };
+    this._config = { refresh: 30, max_columns: 3, height: 640, expand_clients: false, font_scale: 1, layout_editing: "admin", ...config };
     let stored = null;
     try {
       stored = Number(localStorage.getItem(FS_KEY)) || null;
@@ -270,6 +274,14 @@ class OvCirrusNetworkMap extends HTMLElement {
       const res = await this._hass.callWS(msg);
       this._sites = (res.entries || []).flatMap((e) => e.sites.map((s) => ({ ...s, entry: e.title, entry_id: s.entry_id || e.entry_id })));
       this._isAdmin = !!res.is_admin;
+      const cur = this._sites[this._siteIdx];
+      if (cur && this._localOffsets) {
+        // Drop local edits the server has confirmed.
+        for (const [id, o] of Object.entries(this._localOffsets)) {
+          const saved = cur.positions?.[id];
+          if (saved && Math.abs(saved[0] - o[0]) < 1 && Math.abs(saved[1] - o[1]) < 1) delete this._localOffsets[id];
+        }
+      }
       this._types = res.types || {};
       this._error = this._sites.length ? null : "No OmniVista Cirrus data yet.";
       if (this._config.site && this._sites.length) {
@@ -279,7 +291,7 @@ class OvCirrusNetworkMap extends HTMLElement {
     } catch (err) {
       this._error = `Cannot load map: ${err.message || err}`;
     }
-    if (!this._editing) this._render();
+    if (!this._editing && !this._drag) this._render();
   }
 
   // ---------- layout ----------
@@ -387,56 +399,71 @@ class OvCirrusNetworkMap extends HTMLElement {
     }
   }
 
-  _place(node, cx, y, out) {
-    node._x = cx - node._cw / 2;
-    node._y = y;
+  // Offsets saved from dragging: a node moves together with everything placed under it.
+  _off(id) {
+    const o = this._offsets?.[id];
+    return o ? [Number(o[0]) || 0, Number(o[1]) || 0] : [0, 0];
+  }
+
+  // Wrap a group box around wherever its devices (and their link labels) ended up.
+  _wrap(g, above) {
+    const kids = g.children;
+    const left = Math.min(...kids.map((c) => c._x)) - PAD;
+    const right =
+      Math.max(...kids.map((c) => Math.max(c._x + (c._rw || c._cw), c._x + c._cw / 2 + (c._labelRight || 0)))) + PAD;
+    const top = Math.min(...kids.map((c) => c._y)) - above;
+    const bottom = Math.max(...kids.map((c) => c._y + CHIP_H)) + PAD;
+    g._bx = left;
+    g._x = left;
+    g._y = top;
+    g._bw = right - left;
+    g._h = bottom - top;
+  }
+
+  _place(node, cx, y, out, ox = 0, oy = 0) {
+    const [dx, dy] = this._off(node.id);
+    ox += dx;
+    oy += dy;
+    node._x = cx - node._cw / 2 + ox;
+    node._y = y + oy;
     out.nodes.push(node);
-    out.maxY = Math.max(out.maxY, y + CHIP_H);
     if (!node._groups.length || node._collapsed) return;
     if (node._stack) {
       const trunkX = cx - node._gw / 2 + TRUNK / 2;
       let gy = y + CHIP_H + 36;
       for (const g of node._groups) {
-        g._x = g._bx = trunkX + TRUNK / 2;
-        g._bw = g._w;
-        g._y = gy;
+        g._x = trunkX + TRUNK / 2 + ox;
+        g._y = gy + oy;
+        this._placeLeaves(g, g._y + LABEL_H + PAD, out);
+        this._wrap(g, LABEL_H + PAD);
         out.groups.push(g);
-        out.trunks.push({ x1: node._x + 6, y1: y + CHIP_H / 2, tx: trunkX, ty: gy + 2, x2: g._x });
-        this._placeLeaves(g, gy + LABEL_H + PAD, out);
+        out.trunks.push({ node, g });
         gy += g._h + 34;
       }
-      out.maxY = Math.max(out.maxY, gy);
       return;
     }
     let x = cx - node._gw / 2;
     const gy = y + CHIP_H + V_GAP;
     for (const g of node._groups) {
-      g._x = x;
-      g._y = gy;
-      g._bx = x;
-      g._bw = g._w;
+      const above = LABEL_H + PAD + (g.leaf ? 0 : g._rowsH || 0);
+      const chipY = gy + above;
       out.groups.push(g);
-      out.maxY = Math.max(out.maxY, gy + g._h);
-      const chipY = gy + LABEL_H + PAD + (g.leaf ? 0 : g._rowsH || 0);
       if (g.leaf) {
-        out.edges.push({ from: node, toX: g._x + PAD + 40, toY: gy, label: "", status: "up", group: true });
-        this._placeLeaves(g, chipY, out);
+        g._x = x + ox;
+        this._placeLeaves(g, chipY + oy, out);
+        this._wrap(g, above);
+        out.edges.push({ from: node, toGroup: g, label: "", status: "up", group: true });
       } else {
-        let cxs = g._x + PAD;
-        const centers = [];
-        let boxRight = -Infinity;
+        let cxs = x + PAD;
         for (const c of g.children) {
           const ccx = cxs + c._w / 2;
-          boxRight = Math.max(boxRight, ccx + c._cw / 2, ccx + (c._labelRight || 0));
-          centers.push(ccx);
-          this._place(c, ccx, chipY, out);
+          this._place(c, ccx, chipY, out, ox, oy);
           const link = c.link || {};
           out.edges.push({
             from: node,
+            to: c,
             gid: g.id,
             cid: c.id,
-            toX: ccx,
-            toY: chipY,
             label: link.label || "",
             status: link.status || "up",
             dashed: !!link.inferred,
@@ -444,9 +471,7 @@ class OvCirrusNetworkMap extends HTMLElement {
           });
           cxs += c._slot + GAP_X;
         }
-        const first = g.children[0], last = g.children[g.children.length - 1];
-        g._bx = centers[0] - first._cw / 2 - PAD;
-        g._bw = Math.max(centers[centers.length - 1] + last._cw / 2, boxRight) - g._bx + PAD;
+        this._wrap(g, above);
       }
       x += g._w + GAP_X;
     }
@@ -456,12 +481,39 @@ class OvCirrusNetworkMap extends HTMLElement {
     g.children.forEach((c, i) => {
       const col = i % g._cols;
       const row = Math.floor(i / g._cols);
-      c._x = g._x + PAD + col * (g._colW + GAP_X);
+      const [dx, dy] = this._off(c.id); // wired clients can be moved on their own
+      c._x = g._x + PAD + col * (g._colW + GAP_X) + dx;
       c._rw = g._colW;
-      c._y = chipY + row * (CHIP_H + ROW_GAP);
+      c._y = chipY + row * (CHIP_H + ROW_GAP) + dy;
       c._groups = [];
       out.nodes.push(c);
     });
+  }
+
+  // After placement: shift everything into view and resolve edge end points.
+  _finalize(out) {
+    const xs = [...out.nodes.map((n) => n._x), ...out.groups.map((g) => g._bx)];
+    const ys = [...out.nodes.map((n) => n._y), ...out.groups.map((g) => g._y)];
+    const sx = Math.max(0, 20 - Math.min(...xs));
+    const sy = Math.max(0, 20 - Math.min(...ys));
+    if (sx || sy) {
+      out.nodes.forEach((n) => ((n._x += sx), (n._y += sy)));
+      out.groups.forEach((g) => ((g._bx += sx), (g._x += sx), (g._y += sy)));
+    }
+    for (const e of out.edges) {
+      if (e.toGroup) {
+        e.toX = e.toGroup._bx + PAD + 40;
+        e.toY = e.toGroup._y;
+      } else {
+        e.toX = e.to._x + e.to._cw / 2;
+        e.toY = e.to._y;
+      }
+    }
+    out.trunks = out.trunks.map(({ node, g }) => ({
+      x1: node._x + 6, y1: node._y + CHIP_H / 2, tx: g._bx - TRUNK / 2, ty: g._y + 2, x2: g._bx,
+    }));
+    out.maxX = Math.max(...out.nodes.map((n) => n._x + (n._rw || n._cw)), ...out.groups.map((g) => g._bx + g._bw));
+    out.maxY = Math.max(...out.nodes.map((n) => n._y + CHIP_H), ...out.groups.map((g) => g._y + g._h));
   }
 
   // ---------- render ----------
@@ -501,8 +553,10 @@ class OvCirrusNetworkMap extends HTMLElement {
       VLAN_EXPANDED = this._vmore || (this._vmore = new Set());
       this._measure(root);
       const out = { nodes: [], groups: [], edges: [], trunks: [], maxY: 0 };
+      if (!this._drag) this._offsets = { ...(site.positions || {}), ...(this._localOffsets || {}) };
       this._place(root, root._w / 2 + 20, 20, out);
-      W = root._w + 40;
+      this._finalize(out);
+      W = Math.max(root._w + 40, out.maxX + 40);
       H = out.maxY + 30;
 
       const labels = [];
@@ -577,6 +631,8 @@ class OvCirrusNetworkMap extends HTMLElement {
             (n.logo ? `<img class="logo" src="${esc(n.logo)}" alt="" loading="lazy">` : "") +
             (n.is_new ? `<span class="new">NEW</span>` : "");
           const sel =
+            (this._editLayout && DRAGGABLE.has(n.kind) ? " draggable" : "") +
+            (this._drag?.id === n.id && this._drag.moved ? " dragging" : "") +
             (this._selected === n.id ? " selected" : "") +
             (sv !== null && n.vlan ? (String(n.vlan) === String(sv) ? " vmatch" : " dim") : "");
           return `<div class="node ${esc(n.kind)}${sel}" data-id="${esc(n.id)}" style="left:${n._x}px;top:${n._y}px;width:${n._rw || n._cw}px;height:${CHIP_H}px">
@@ -587,7 +643,7 @@ class OvCirrusNetworkMap extends HTMLElement {
         .join("");
 
       const vpWidth = prevVp?.clientWidth || this.getBoundingClientRect().width || 800;
-      const zoom = this._zoom ?? Math.min(1, Math.max(0.35, (vpWidth - 4) / W));
+      const zoom = this._drag ? this._drag.zoom : this._zoom ?? Math.min(1, Math.max(0.35, (vpWidth - 4) / W));
       this._fitZoom = zoom;
       this._lastZoom = zoom;
       body = `<div class="sizer" style="width:${W * zoom}px;height:${H * zoom}px">
@@ -684,7 +740,15 @@ class OvCirrusNetworkMap extends HTMLElement {
         <div class="header">
           <div class="title">${esc(cfg.title || "Network map")}</div>${siteSel}
           <div class="stats">${stats}</div>
-          <div class="zoom"><button data-font="-" title="Smaller map text" aria-label="Smaller map text">A−</button><button data-font="+" title="Larger map text" aria-label="Larger map text">A+</button><span class="sep"></span><button data-zoom="-" title="Zoom out">−</button><button data-zoom="fit" title="Fit to width">fit</button><button data-zoom="+" title="Zoom in">+</button></div>
+          ${
+            this._canEditLayout()
+              ? `<div class="layout">${
+                  this._editLayout
+                    ? `<span class="hint">Drag devices to arrange the map</span><button data-layout="reset" title="Put every device back where it was drawn automatically">Reset layout</button><button data-layout="done" class="on">Done</button>`
+                    : `<button data-layout="edit" title="Drag devices to rearrange the map">Edit layout</button>`
+                }</div>`
+              : ""
+          }<div class="zoom"><button data-font="-" title="Smaller map text" aria-label="Smaller map text">A−</button><button data-font="+" title="Larger map text" aria-label="Larger map text">A+</button><span class="sep"></span><button data-zoom="-" title="Zoom out">−</button><button data-zoom="fit" title="Fit to width">fit</button><button data-zoom="+" title="Zoom in">+</button></div>
         </div>${warn}${
           site && Object.keys(site.vlans || {}).length && cfg.show_vlans !== false
             ? `<div class="vlans"><span class="vlabel">VLANs</span>${Object.entries(site.vlans)
@@ -726,6 +790,56 @@ class OvCirrusNetworkMap extends HTMLElement {
     this._bind();
   }
 
+  _canEditLayout() {
+    const mode = this._config.layout_editing;
+    return mode === true || (mode !== false && this._isAdmin);
+  }
+
+  _startDrag(ev, id) {
+    if (ev.button !== undefined && ev.button !== 0) return;
+    const zoom = this._lastZoom || 1;
+    this._drag = { id, sx: ev.clientX, sy: ev.clientY, base: this._off(id), moved: false, zoom };
+    const move = (e) => {
+      const d = this._drag;
+      if (!d) return;
+      const dx = (e.clientX - d.sx) / d.zoom;
+      const dy = (e.clientY - d.sy) / d.zoom;
+      if (!d.moved && Math.hypot(dx, dy) < 4) return;
+      d.moved = true;
+      this._offsets = { ...this._offsets, [d.id]: [d.base[0] + dx, d.base[1] + dy] };
+      if (!this._raf) {
+        this._raf = requestAnimationFrame(() => {
+          this._raf = null;
+          this._render();
+        });
+      }
+    };
+    const up = async () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      window.removeEventListener("pointercancel", up);
+      const d = this._drag;
+      this._drag = null;
+      if (!d?.moved) return;
+      this._suppressClick = true;
+      const offset = this._offsets[d.id];
+      this._localOffsets = { ...(this._localOffsets || {}), [d.id]: offset };
+      this._render();
+      const site = this._sites?.[this._siteIdx];
+      try {
+        await this._hass.callWS({
+          type: "ovcirrus/set_position", entry_id: site.entry_id, site_id: site.site_id,
+          node_id: d.id, dx: offset[0], dy: offset[1],
+        });
+      } catch (err) {
+        console.warn("ovcirrus: could not save layout", err);
+      }
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+    window.addEventListener("pointercancel", up);
+  }
+
   _bind() {
     const root = this.shadowRoot;
     root.querySelectorAll("[data-toggle]").forEach((b) =>
@@ -736,8 +850,41 @@ class OvCirrusNetworkMap extends HTMLElement {
         this._render();
       })
     );
+    root.querySelectorAll(".node.draggable").forEach((el) =>
+      el.addEventListener("pointerdown", (ev) => {
+        if (ev.target.closest("button")) return;
+        ev.preventDefault();
+        this._startDrag(ev, el.dataset.id);
+      })
+    );
+    root.querySelectorAll("[data-layout]").forEach((b) =>
+      b.addEventListener("click", async () => {
+        const action = b.dataset.layout;
+        if (action === "edit") {
+          this._editLayout = true;
+          this._zoom = this._zoom ?? this._fitZoom; // keep the scale steady while arranging
+        }
+        if (action === "done") this._editLayout = false;
+        if (action === "reset") {
+          const site = this._sites?.[this._siteIdx];
+          this._localOffsets = {};
+          this._offsets = {};
+          if (site) site.positions = {};
+          try {
+            await this._hass.callWS({ type: "ovcirrus/reset_positions", entry_id: site.entry_id, site_id: site.site_id });
+          } catch (err) {
+            console.warn("ovcirrus: could not reset layout", err);
+          }
+        }
+        this._render();
+      })
+    );
     root.querySelectorAll(".node").forEach((el) =>
       el.addEventListener("click", () => {
+        if (this._suppressClick) {
+          this._suppressClick = false;
+          return;
+        }
         this._selected = this._selected === el.dataset.id ? null : el.dataset.id;
         this._render();
       })
@@ -837,6 +984,14 @@ const STYLE = `
   .stats { display:flex; gap:12px; margin-left:auto; color:var(--secondary-text-color); }
   .stat { display:flex; align-items:center; gap:4px; } .stat ha-icon { --mdc-icon-size:18px; }
   .zoom { display:flex; align-items:center; }
+  .layout { display:flex; align-items:center; gap:4px; }
+  .layout .hint { font-size:12px; color:var(--secondary-text-color); margin-right:4px; }
+  .layout button { border:1px solid var(--divider-color); background:var(--card-background-color); color:var(--primary-text-color);
+    border-radius:6px; height:26px; padding:0 10px; cursor:pointer; font:inherit; font-size:12px; }
+  .layout button.on { background:var(--primary-color); border-color:var(--primary-color); color:var(--text-primary-color,#fff); }
+  .node.draggable { cursor:grab; touch-action:none; user-select:none; outline:1px dashed color-mix(in srgb, var(--primary-color) 55%, transparent);
+    outline-offset:2px; }
+  .node.dragging { cursor:grabbing; z-index:5; box-shadow:0 6px 18px rgba(0,0,0,.18); background:var(--card-background-color); }
   .zoom .sep { width:8px; }
   .zoom button { border:1px solid var(--divider-color); background:var(--card-background-color); color:var(--primary-text-color);
     border-radius:6px; min-width:30px; height:26px; cursor:pointer; margin-left:2px; }

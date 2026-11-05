@@ -476,6 +476,7 @@ class CirrusCoordinator(DataUpdateCoordinator[CirrusData]):
                     extras=extras,
                 )
                 maps[sid]["ssh_errors"] = list(data.ssh_errors.values())
+                maps[sid]["positions"] = dict(self.store.positions.get(sid, {}))
                 if data.unifi_error:
                     maps[sid]["unifi_error"] = data.unifi_error
             except Exception:  # noqa: BLE001 - never let the map break polling

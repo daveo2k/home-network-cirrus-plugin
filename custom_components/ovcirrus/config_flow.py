@@ -121,6 +121,9 @@ async def suggest_hosts(candidates: dict[str, dict], port: int) -> dict[str, dic
     return dict(await asyncio.gather(*(probe(s, i) for s, i in candidates.items())))
 
 
+SKIP = "skip"  # dropdown value meaning "do not SSH to this switch"
+
+
 def _field(info: dict, serial: str) -> str:
     """Form field label for a switch's SSH address (shown as-is by the HA frontend)."""
     return f"SSH address for {info['name']} ({serial})"
@@ -135,12 +138,27 @@ def _ssh_schema(defaults: Mapping[str, Any], switches: dict[str, dict]) -> vol.S
         vol.Optional(CONF_SSH_KEY_PATH, default=defaults.get(CONF_SSH_KEY_PATH, DEFAULT_SSH_KEY_PATH)): TextSelector(),
     }
     for serial, info in switches.items():
-        default = defaults.get(_field(info, serial))  # value typed in a previous attempt
+        default = defaults.get(_field(info, serial))  # value picked in a previous attempt
+        if default is None and serial in saved:
+            default = saved[serial] or SKIP
         if default is None:
-            default = saved.get(serial)
-        if default is None:
-            default = (info.get("reachable") or info["addresses"] or [""])[0]
-        fields[vol.Optional(_field(info, serial), default=default)] = TextSelector()
+            default = (info.get("reachable") or info["addresses"] or [SKIP])[0]
+        reachable = set(info.get("reachable") or [])
+        # Reachable addresses first; typing any other IP/hostname is still allowed (custom_value).
+        addresses = sorted(info["addresses"], key=lambda a: a not in reachable)
+        if default not in (*addresses, SKIP):
+            addresses.insert(0, default)  # a custom address saved earlier
+        options = [
+            SelectOptionDict(
+                value=a,
+                label=f"{a} — answers on the SSH port" if a in reachable else
+                (f"{a} — no answer from Home Assistant" if a in info["addresses"] else f"{a} — entered manually"),
+            )
+            for a in addresses
+        ] + [SelectOptionDict(value=SKIP, label="Don't read this switch")]
+        fields[vol.Optional(_field(info, serial), default=default)] = SelectSelector(
+            SelectSelectorConfig(options=options, custom_value=True, mode=SelectSelectorMode.DROPDOWN)
+        )
     fields.update(
         {
             vol.Optional(CONF_SSH_PORT, default=defaults.get(CONF_SSH_PORT, DEFAULT_SSH_PORT)): NumberSelector(
@@ -172,7 +190,8 @@ def _collect_ssh(user_input: dict, switches: dict[str, dict]) -> dict:
     data = dict(user_input)
     hosts = {}
     for serial, info in switches.items():
-        hosts[serial] = (data.pop(_field(info, serial), "") or "").strip()
+        value = (data.pop(_field(info, serial), "") or "").strip()
+        hosts[serial] = "" if value == SKIP else value
     data[CONF_SSH_HOSTS] = hosts
     data[CONF_SSH_PORT] = int(data.get(CONF_SSH_PORT, DEFAULT_SSH_PORT))
     return data

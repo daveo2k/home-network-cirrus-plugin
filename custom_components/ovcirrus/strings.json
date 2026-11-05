@@ -24,7 +24,7 @@
       },
       "ssh": {
         "title": "Switch MAC tables (optional)",
-        "description": "Home Assistant can SSH to your OmniSwitches to read `show mac-learning` and `show arp`, so wired clients appear on the map. It uses key or certificate authentication; a `<key>-cert.pub` next to the key is picked up automatically.\n\n{switches}\n\nEach switch has its own **SSH address** field, pre-filled with an address that answers from Home Assistant where one was found. Change it to any IP or hostname Home Assistant can reach, or clear it to skip that switch.",
+        "description": "Home Assistant can SSH to your OmniSwitches to read `show mac-learning` and `show arp`, so wired clients appear on the map. It uses key or certificate authentication; a `<key>-cert.pub` next to the key is picked up automatically.\n\n{switches}\n\nPick each switch's **SSH address** from the addresses Cirrus knows for it; ones that answer from Home Assistant are listed first. You can also type any other IP or hostname, or choose “Don't read this switch”.",
         "data": {
           "ssh_enabled": "Read MAC tables over SSH",
           "ssh_username": "SSH username",
@@ -85,7 +85,7 @@
       },
       "ssh": {
         "title": "Switch MAC tables (SSH)",
-        "description": "Home Assistant can SSH to your OmniSwitches to read `show mac-learning` and `show arp`, so wired clients appear on the map. It uses key or certificate authentication; a `<key>-cert.pub` next to the key is picked up automatically.\n\n{switches}\n\nEach switch has its own **SSH address** field, pre-filled with an address that answers from Home Assistant where one was found. Change it to any IP or hostname Home Assistant can reach, or clear it to skip that switch.",
+        "description": "Home Assistant can SSH to your OmniSwitches to read `show mac-learning` and `show arp`, so wired clients appear on the map. It uses key or certificate authentication; a `<key>-cert.pub` next to the key is picked up automatically.\n\n{switches}\n\nPick each switch's **SSH address** from the addresses Cirrus knows for it; ones that answer from Home Assistant are listed first. You can also type any other IP or hostname, or choose “Don't read this switch”.",
         "data": {
           "ssh_enabled": "Read MAC tables over SSH",
           "ssh_username": "SSH username",
