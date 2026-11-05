@@ -721,7 +721,7 @@ class OvCirrusNetworkMap extends HTMLElement {
       : "";
     const stale =
       this._integrationVersion && this._integrationVersion !== CARD_VERSION
-        ? `<div class="warn">This browser is running map card v${esc(CARD_VERSION)}, but the integration is v${esc(this._integrationVersion)}. Refresh the page (Ctrl+Shift+R, or Cmd+Shift+R on a Mac) to load the new card. In the HA app: Settings → Companion app → Debugging → Reset frontend cache.</div>`
+        ? `<div class="warn stale"><span>A new version of the map is installed (v${esc(this._integrationVersion)}); this page is still running v${esc(CARD_VERSION)}.</span><button class="reload" data-reload>Reload</button></div>`
         : "";
     const warn = stale + (site?.ssh_errors?.length
       ? `<div class="warn" title="${esc(site.ssh_errors.join("\n"))}">MAC table read failed – see log</div>`
@@ -1181,6 +1181,23 @@ class OvCirrusNetworkMap extends HTMLElement {
       save(form.dataset.edit, root.getElementById("ovc-name").value, root.getElementById("ovc-type").value);
     });
     root.querySelector("[data-reset]")?.addEventListener("click", () => save(form.dataset.edit, null, null));
+    root.querySelector("[data-reload]")?.addEventListener("click", async (ev) => {
+      ev.currentTarget.disabled = true;
+      ev.currentTarget.textContent = "Reloading…";
+      // Drop any cached copy of the card's files, then reload: the reloaded page links the new version.
+      // The cache clean-up is best effort and capped, so the reload always happens.
+      const purge = (async () => {
+        if (!window.caches) return;
+        for (const name of await caches.keys()) {
+          const cache = await caches.open(name);
+          for (const req of await cache.keys()) {
+            if (req.url.includes("/ovcirrus_static/")) await cache.delete(req);
+          }
+        }
+      })().catch(() => {});
+      await Promise.race([purge, new Promise((r) => setTimeout(r, 1500))]);
+      window.location.reload();
+    });
     root.querySelectorAll("[data-dsize]").forEach((b) =>
       b.addEventListener("click", () => {
         const step = b.dataset.dsize === "+" ? DS_STEP : -DS_STEP;
@@ -1273,6 +1290,12 @@ const STYLE = `
   .zoom button { border:1px solid var(--divider-color); background:var(--card-background-color); color:var(--primary-text-color);
     border-radius:6px; min-width:30px; height:26px; cursor:pointer; margin-left:2px; }
   .warn { background:var(--warning-color,#ffa600); color:#000; font-size:12px; padding:2px 16px; }
+  .warn.stale { display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; padding:6px 16px; font-size:13px; }
+  .reload { font:inherit; font-size:12px; font-weight:600; padding:4px 14px; border-radius:6px; cursor:pointer;
+    border:1px solid rgba(0,0,0,.35); background:#fff; color:#000; }
+  .reload:hover { background:#f2f2f2; }
+  .reload:focus-visible { outline:2px solid #000; outline-offset:2px; }
+  .reload[disabled] { opacity:.7; cursor:progress; }
   .viewport { overflow:auto; position:relative; background:var(--primary-background-color); }
   .empty { padding:24px; color:var(--secondary-text-color); }
   .canvas { position:relative; transform-origin:0 0; }
