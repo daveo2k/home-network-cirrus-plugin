@@ -25,6 +25,7 @@ class EntryStore:
         self.positions: dict[str, dict[str, list[float]]] = {}  # site_id -> node_id -> [dx, dy]
         self.manual: list[dict] = []  # devices added by the user (map or options)
         self.port_labels: dict[str, dict[str, str]] = {}  # "*" or IP -> port -> your name for it
+        self.view: dict[str, float] = {}  # saved map sizes for every browser: font, client, device
         self.baseline_done = False
 
     async def async_load(self) -> None:
@@ -35,6 +36,7 @@ class EntryStore:
         self.positions = data.get("positions", {})
         self.manual = data.get("manual", [])
         self.port_labels = data.get("port_labels", {})
+        self.view = data.get("view", {})
         self.baseline_done = data.get("baseline_done", False)
 
     def _data(self) -> dict:
@@ -45,6 +47,7 @@ class EntryStore:
             "positions": self.positions,
             "manual": self.manual,
             "port_labels": self.port_labels,
+            "view": self.view,
             "baseline_done": self.baseline_done,
         }
 

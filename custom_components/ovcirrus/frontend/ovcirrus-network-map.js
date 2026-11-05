@@ -262,6 +262,7 @@ class OvCirrusNetworkMap extends HTMLElement {
       storedCs = null;
     }
     this._cs = Math.min(CS_MAX, Math.max(CS_MIN, storedCs || Number(this._config.client_scale) || 1));
+    this._local = { device: !!storedDs, client: !!storedCs };
     this._applyFill();
     let stored = null;
     try {
@@ -270,6 +271,7 @@ class OvCirrusNetworkMap extends HTMLElement {
       stored = null; // storage blocked: fall back to the card setting
     }
     this._fs = Math.min(FS_MAX, Math.max(FS_MIN, stored || Number(this._config.font_scale) || 1));
+    this._local = { ...(this._local || {}), font: !!stored };
   }
 
   static getStubConfig() {
@@ -328,6 +330,7 @@ class OvCirrusNetworkMap extends HTMLElement {
       this._sites = (res.entries || []).flatMap((e) => e.sites.map((s) => ({ ...s, entry: e.title, entry_id: s.entry_id || e.entry_id })));
       this._isAdmin = !!res.is_admin;
       this._integrationVersion = res.version || null;
+      this._applyServerView(res.view || {});
       this._nmap = !!res.nmap;
       const cur = this._sites[this._siteIdx];
       if (cur && this._localOffsets) {
@@ -887,9 +890,7 @@ class OvCirrusNetworkMap extends HTMLElement {
                 }</div>`
               : ""
           }<div class="zoom">
-            <span class="grp" title="Map text size"><button data-font="-" title="Smaller map text" aria-label="Smaller map text">A−</button><button data-font="+" title="Larger map text" aria-label="Larger map text">A+</button></span>
-            <span class="grp" title="Client size: ${this._cs}×"><ha-icon icon="mdi:cellphone"></ha-icon><button data-csize="-" title="Smaller clients" aria-label="Smaller clients">−</button><button data-csize="+" title="Larger clients" aria-label="Larger clients">+</button></span>
-            <span class="grp" title="Device size: ${this._ds}×"><ha-icon icon="mdi:access-point"></ha-icon><button data-dsize="-" title="Smaller devices and client counts" aria-label="Smaller devices">−</button><button data-dsize="+" title="Larger devices and client counts" aria-label="Larger devices">+</button></span>
+            <span class="viewwrap"><button class="viewbtn${this._viewOpen ? " on" : ""}" data-viewmenu aria-haspopup="true" aria-expanded="${!!this._viewOpen}" title="Text, client and device size"><ha-icon icon="mdi:tune-variant"></ha-icon>View</button>${this._viewOpen ? this._viewMenu() : ""}</span>
             <span class="grp" title="Zoom"><ha-icon icon="mdi:magnify"></ha-icon><button data-zoom="-" title="Zoom out" aria-label="Zoom out">−</button><button data-zoom="fit" title="Fit to width">fit</button><button data-zoom="+" title="Zoom in" aria-label="Zoom in">+</button></span>
           </div>
         </div>${warn}${
@@ -937,6 +938,30 @@ class OvCirrusNetworkMap extends HTMLElement {
     }
     if (scroll && vp) [vp.scrollLeft, vp.scrollTop] = scroll;
     this._bind();
+  }
+
+  _applyServerView(view) {
+    this._serverView = view || {};
+    const clamp = (v, lo, hi, d) => Math.min(hi, Math.max(lo, Number(v) || d));
+    if (!this._local?.font && view.font) this._fs = clamp(view.font, FS_MIN, FS_MAX, 1);
+    if (!this._local?.client && view.client) this._cs = clamp(view.client, CS_MIN, CS_MAX, 1);
+    if (!this._local?.device && view.device) this._ds = clamp(view.device, DS_MIN, DS_MAX, 2);
+  }
+
+  _viewMenu() {
+    const row = (label, key, value, hint) => `<div class="vrow"><span class="vlab">${label}<small>${hint}</small></span>
+      <span class="vctl"><button data-${key}="-" aria-label="Smaller ${label.toLowerCase()}">−</button><b>${value}</b><button data-${key}="+" aria-label="Larger ${label.toLowerCase()}">+</button></span></div>`;
+    const sv = this._serverView || {};
+    const saved = sv.font || sv.client || sv.device;
+    return `<div class="viewmenu" role="dialog" aria-label="Map view">
+      ${row("Text", "font", `${Math.round((this._fs || 1) * 100)}%`, "names and labels on the map")}
+      ${row("Clients", "csize", `${this._cs || 1}×`, "wireless and wired clients")}
+      ${row("Devices", "dsize", `${this._ds || 2}×`, "switches, APs, gateway, client counts")}
+      <div class="vfoot">
+        ${this._isAdmin ? `<button class="act" data-viewsave title="Every browser and device starts with these sizes">Save as default for all devices</button>` : ""}
+        <button class="act ghost" data-viewreset>${saved ? "Use saved default" : "Reset"}</button>
+        <div class="muted">${this._viewSaved ? "Saved as the default for all devices." : "Changes are remembered in this browser."}${saved ? ` Saved default: text ${Math.round((sv.font || 1) * 100)}%, clients ${sv.client || 1}×, devices ${sv.device || 2}×.` : ""}</div>
+      </div></div>`;
   }
 
   _canEditLayout() {
@@ -1215,10 +1240,61 @@ class OvCirrusNetworkMap extends HTMLElement {
       await Promise.race([purge, new Promise((r) => setTimeout(r, 1500))]);
       window.location.reload();
     });
+    root.querySelector("[data-viewmenu]")?.addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      this._viewOpen = !this._viewOpen;
+      this._viewSaved = false;
+      this._render();
+    });
+    root.querySelector(".viewmenu")?.addEventListener("click", (ev) => ev.stopPropagation());
+    if (!this._closeView) {
+      // Close the menu on any click outside it, or Escape.
+      this._closeView = (ev) => {
+        if (!this._viewOpen) return;
+        if (ev.type === "keydown" && ev.key !== "Escape") return;
+        if (ev.type === "click" && ev.composedPath().some((el) => el.classList?.contains("viewwrap"))) return;
+        this._viewOpen = false;
+        this._render();
+      };
+      window.addEventListener("click", this._closeView);
+      window.addEventListener("keydown", this._closeView);
+    }
+    const forgetLocal = () => {
+      try {
+        [FS_KEY, CS_KEY, DS_KEY].forEach((k) => localStorage.removeItem(k));
+      } catch (e) {
+        // storage blocked: nothing stored to forget
+      }
+      this._local = { font: false, client: false, device: false };
+    };
+    root.querySelector("[data-viewsave]")?.addEventListener("click", async () => {
+      const view = { font: this._fs || 1, client: this._cs || 1, device: this._ds || 2 };
+      try {
+        await this._hass.callWS({ type: "ovcirrus/save_view", entry_id: entryId, ...view });
+        forgetLocal(); // this browser now follows the saved default too
+        this._serverView = view;
+        this._viewSaved = true;
+      } catch (err) {
+        console.warn("ovcirrus: could not save view", err);
+      }
+      this._render();
+    });
+    root.querySelector("[data-viewreset]")?.addEventListener("click", () => {
+      forgetLocal();
+      const sv = this._serverView || {};
+      const cfg = this._config;
+      this._fs = Math.min(FS_MAX, Math.max(FS_MIN, sv.font || Number(cfg.font_scale) || 1));
+      this._cs = Math.min(CS_MAX, Math.max(CS_MIN, sv.client || Number(cfg.client_scale) || 1));
+      this._ds = Math.min(DS_MAX, Math.max(DS_MIN, sv.device || Number(cfg.device_scale) || 2));
+      this._viewSaved = false;
+      this._render();
+    });
     root.querySelectorAll("[data-csize]").forEach((b) =>
       b.addEventListener("click", () => {
         const step = b.dataset.csize === "+" ? CS_STEP : -CS_STEP;
         this._cs = Math.min(CS_MAX, Math.max(CS_MIN, (this._cs || 1) + step));
+        this._local = { ...this._local, client: true };
+        this._viewSaved = false;
         try {
           localStorage.setItem(CS_KEY, String(this._cs));
         } catch (e) {
@@ -1231,6 +1307,8 @@ class OvCirrusNetworkMap extends HTMLElement {
       b.addEventListener("click", () => {
         const step = b.dataset.dsize === "+" ? DS_STEP : -DS_STEP;
         this._ds = Math.min(DS_MAX, Math.max(DS_MIN, (this._ds || 2) + step));
+        this._local = { ...this._local, device: true };
+        this._viewSaved = false;
         try {
           localStorage.setItem(DS_KEY, String(this._ds));
         } catch (e) {
@@ -1243,6 +1321,8 @@ class OvCirrusNetworkMap extends HTMLElement {
       b.addEventListener("click", () => {
         const step = b.dataset.font === "+" ? 0.1 : -0.1;
         this._fs = Math.round(Math.min(FS_MAX, Math.max(FS_MIN, (this._fs || 1) + step)) * 10) / 10;
+        this._local = { ...this._local, font: true };
+        this._viewSaved = false;
         try {
           localStorage.setItem(FS_KEY, String(this._fs));
         } catch (e) {
@@ -1297,6 +1377,24 @@ const STYLE = `
   .stats { display:flex; gap:12px; margin-left:auto; color:var(--secondary-text-color); }
   .stat { display:flex; align-items:center; gap:4px; } .stat ha-icon { --mdc-icon-size:18px; }
   .zoom { display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
+  .viewwrap { position:relative; }
+  .viewbtn { display:inline-flex; align-items:center; gap:4px; height:28px; padding:0 10px; border-radius:8px; cursor:pointer; font:inherit;
+    font-size:12.5px; border:1px solid var(--divider-color); background:var(--card-background-color); color:var(--primary-text-color); }
+  .viewbtn ha-icon { --mdc-icon-size:16px; }
+  .viewbtn.on { border-color:var(--primary-color); color:var(--primary-color); }
+  .viewmenu { position:absolute; right:0; top:calc(100% + 6px); z-index:6; width:290px; padding:10px 12px; border-radius:12px;
+    background:var(--card-background-color); border:1px solid var(--divider-color); box-shadow:0 8px 24px rgba(0,0,0,.18);
+    display:grid; gap:8px; color:var(--primary-text-color); font-size:13px; }
+  .vrow { display:flex; align-items:center; justify-content:space-between; gap:10px; }
+  .vlab { display:grid; font-weight:600; }
+  .vlab small { font-weight:400; font-size:11px; color:var(--secondary-text-color); }
+  .vctl { display:inline-flex; align-items:center; gap:6px; }
+  .vctl b { min-width:42px; text-align:center; font-variant-numeric:tabular-nums; font-weight:600; }
+  .vctl button { width:28px; height:28px; border-radius:7px; cursor:pointer; font:inherit; font-size:16px; line-height:1;
+    border:1px solid var(--divider-color); background:var(--card-background-color); color:var(--primary-text-color); }
+  .vctl button:hover, .viewbtn:hover { border-color:var(--primary-color); }
+  .vfoot { display:grid; gap:6px; border-top:1px solid var(--divider-color); padding-top:8px; }
+  .vfoot .act { margin-top:0; }
   .zoom .grp { display:inline-flex; align-items:center; gap:2px; padding:2px 3px 2px 6px; border:1px solid var(--divider-color);
     border-radius:8px; color:var(--secondary-text-color); }
   .zoom .grp:first-child { padding-left:3px; }
@@ -1496,7 +1594,8 @@ const STYLE = `
   .close { border:none; background:none; font-size:20px; cursor:pointer; color:var(--secondary-text-color); }
   table { width:100%; border-collapse:collapse; font-size:12px; }
   td { padding:3px 4px; border-top:1px solid var(--divider-color); vertical-align:top; word-break:break-word; }
-  td:first-child { color:var(--secondary-text-color); white-space:nowrap; width:1%; }
+  td:first-child { color:var(--secondary-text-color); width:34%; max-width:150px; overflow-wrap:anywhere; word-break:normal; }
+  td + td { overflow-wrap:anywhere; word-break:normal; }
 `;
 
 // ---------- sidebar panel: the map full screen in the main pane ----------

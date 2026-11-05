@@ -539,9 +539,11 @@ def build_site_map(
             for m in sorted(rec["members"], key=lambda m: (_port_index(m["a_port"]) or 0, m["a_port"])):
                 sw_side = m["a"]
                 v = port_vlan(sw_side, m["a_port"], m["lag"])
-                far = m["b_port"] or m["b_desc"]
+                far = m["b_port"] or re.sub(r"^Alcatel-Lucent Enterprise\s+", "", m["b_desc"] or "")
                 members.append({
                     "label": " ↔ ".join(x for x in (m["a_port"], far) if x),
+                    "port": m["a_port"],
+                    "far": far,
                     "speed": _speed(m["speed"]),
                     "status": "up" if m["up"] else "down",
                     "untagged": (v or {}).get("untagged", []),
@@ -790,7 +792,8 @@ def build_site_map(
             ("DNS name", node.get("dns")),
             ("Uplink", (edge.get(key) or {}).get("label")),
             *[
-                (f"Link {m['label']}", " · ".join(x for x in (m["speed"], m["status"], vlan_text(m, extras.vlans)) if x))
+                (f"Link {m.get('port') or m['label']}",
+                 " · ".join(x for x in (f"to {m['far']}" if m.get("far") else None, m["speed"], m["status"], vlan_text(m, extras.vlans)) if x))
                 for m in (edge.get(key) or {}).get("links") or []
             ],
         ]

@@ -72,7 +72,7 @@ client_scale: 1           # starting size of wireless and wired clients (0.75-2.
 show_vlans: true          # VLAN legend above the map
 ```
 
-Click a node for details, use **+ / −** on a node to expand or collapse it, and the zoom buttons (or **fit**) to size the map. **A− / A+** change the size of the text on the map (not the header, VLAN bar or details panel). The **device size − / +** buttons (1× to 3×) scale device rings, photos, the AP client-count bubble and brand logos. The **client size − / +** buttons (0.75× to 2.5×) do the same for wireless and wired clients. All three settings are remembered per browser.
+Click a node for details, use **+ / −** on a node to expand or collapse it, and the zoom buttons (or **fit**) to size the map. **View** opens the size settings: **Text** (map names and labels only), **Clients** (0.75× to 2.5×) and **Devices** (1× to 3×: rings, photos, the AP client-count bubble and brand logos). Changes are remembered in each browser. Admins can **Save as default for all devices**, which stores the sizes in Home Assistant so every browser and the app start with them. **Reset** returns to the saved default.
 
 **Edit layout** (admins) lets you drag switches, APs, gateways, wired and manual devices. Everything under a device moves with it, so an AP's wireless clients stay with their AP. Links, labels and boxes follow. Positions are saved in Home Assistant and shared by every dashboard. **Snap to grid** (on by default) aligns devices to a dot grid shown while editing; hold **Alt** while dragging to place a device freely. **Reset layout** returns to the automatic layout. The choice is remembered per browser, and boxes resize to fit.
 

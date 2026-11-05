@@ -103,6 +103,7 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     websocket_api.async_register_command(hass, ws_save_device)
     websocket_api.async_register_command(hass, ws_remove_device)
     websocket_api.async_register_command(hass, ws_label_port)
+    websocket_api.async_register_command(hass, ws_save_view)
     websocket_api.async_register_command(hass, ws_reset_positions)
     return True
 
@@ -225,6 +226,8 @@ def ws_topology(hass: HomeAssistant, connection: websocket_api.ActiveConnection,
             "is_admin": bool(connection.user and connection.user.is_admin),
             "nmap": bool(hass.data.get(DOMAIN, {}).get("nmap")),
             "version": VERSION,
+            "view": next((dict(e.runtime_data.store.view) for e in hass.config_entries.async_entries(DOMAIN)
+                          if e.state is ConfigEntryState.LOADED and e.runtime_data.store.view), {}),
             "types": {k: v[0] for k, v in TYPES.items()},
         },
     )
@@ -386,6 +389,28 @@ def ws_remove_device(hass: HomeAssistant, connection: websocket_api.ActiveConnec
     coordinator.store.remove_manual(msg["id"])
     coordinator.rebuild()
     connection.send_result(msg["id"], {"ok": True})
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "ovcirrus/save_view",
+        vol.Required("entry_id"): str,
+        vol.Optional("font"): vol.Any(None, vol.All(vol.Coerce(float), vol.Range(min=0.5, max=3))),
+        vol.Optional("client"): vol.Any(None, vol.All(vol.Coerce(float), vol.Range(min=0.5, max=3))),
+        vol.Optional("device"): vol.Any(None, vol.All(vol.Coerce(float), vol.Range(min=0.5, max=4))),
+    }
+)
+@callback
+def ws_save_view(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict) -> None:
+    """Save text / client / device sizes as the default for every browser (None clears)."""
+    coordinator = _coordinator(hass, msg["entry_id"])
+    if not coordinator:
+        connection.send_error(msg["id"], "not_found", "Unknown entry")
+        return
+    coordinator.store.view = {k: msg[k] for k in ("font", "client", "device") if msg.get(k) is not None}
+    coordinator.store.schedule_save()
+    connection.send_result(msg["id"], {"view": coordinator.store.view})
 
 
 @websocket_api.require_admin
