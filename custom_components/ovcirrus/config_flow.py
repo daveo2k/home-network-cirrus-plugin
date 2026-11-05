@@ -79,8 +79,9 @@ from .topology import client_name
 _LOGGER = logging.getLogger(__name__)
 
 
-def switch_candidates(devices: list[dict], topologies: list[dict]) -> dict[str, dict]:
-    """Every address Cirrus knows for each OmniSwitch: device IP plus LLDP/topology management IPs."""
+def switch_candidates(devices: list[dict], topologies: list[dict], interfaces: list[dict] | None = None) -> dict[str, dict]:
+    """Every address Cirrus knows for each OmniSwitch: device IP, LLDP management IPs and its
+    IPv4 VLAN interfaces that are up (with VLAN id and name for the dropdown labels)."""
     nodes = {}
     for topo in topologies:
         for node in (topo or {}).get("nodes") or []:
@@ -93,11 +94,35 @@ def switch_candidates(devices: list[dict], topologies: list[dict]) -> dict[str, 
         node = nodes.get(dev["serialNumber"], {})
         addrs = [dev.get("ipAddress"), node.get("ipAddress")]
         addrs += [a.get("address") for a in node.get("managementAddresses") or []]
+        labels: dict[str, str] = {}
+        masks: dict[str, str] = {}
+        if dev.get("ipAddress"):
+            labels[dev["ipAddress"]] = "address Cirrus manages it on"
+        mac = (dev.get("macAddress") or "").upper()
+        for iface in interfaces or []:
+            if (iface.get("macAddress") or iface.get("ipInterfaceRouterMac") or "").upper() != mac:
+                continue
+            addr = iface.get("ipInterfaceAddress") or ""
+            if ":" in addr or addr in ("", "0.0.0.0") or addr.startswith("127."):
+                continue  # IPv4 only; skip loopback / unset
+            if (iface.get("ipInterfaceOperState") or "").lower() != "up":
+                continue
+            addrs.append(addr)
+            vlan = iface.get("ipInterfaceVlanID")
+            name = iface.get("ipInterfaceName") or ""
+            labels.setdefault(addr, f"VLAN {vlan} {name}".strip() if vlan else name or "IP interface")
+            if iface.get("ipInterfaceMask"):
+                masks[addr] = iface["ipInterfaceMask"]
         seen: list[str] = []
         for addr in addrs:
             if addr and addr not in seen and addr not in ("0.0.0.0",):
                 seen.append(addr)
-        result[dev["serialNumber"]] = {"name": dev.get("name") or dev["serialNumber"], "addresses": seen}
+        result[dev["serialNumber"]] = {
+            "name": dev.get("name") or dev["serialNumber"],
+            "addresses": seen,
+            "labels": labels,
+            "masks": masks,
+        }
     return result
 
 
@@ -110,18 +135,40 @@ async def _port_open(host: str, port: int, timeout: float = 2.5) -> bool:
     return True
 
 
-async def suggest_hosts(candidates: dict[str, dict], port: int) -> dict[str, dict]:
-    """Probe each candidate address on the SSH port; mark which ones answer from Home Assistant."""
+def _same_subnet(addr: str, mask: str | None, ha_ip: str | None) -> bool:
+    if not (mask and ha_ip):
+        return False
+    try:
+        return ipaddress.ip_address(ha_ip) in ipaddress.ip_network(f"{addr}/{mask}", strict=False)
+    except ValueError:
+        return False
+
+
+async def suggest_hosts(candidates: dict[str, dict], port: int, ha_ip: str | None = None) -> dict[str, dict]:
+    """Probe each candidate address on the SSH port and rank them: on Home Assistant's own subnet
+    and answering first, then answering, then the rest."""
 
     async def probe(serial: str, info: dict):
         results = await asyncio.gather(*(_port_open(a, port) for a in info["addresses"]))
-        reachable = [a for a, ok in zip(info["addresses"], results) if ok]
-        return serial, {**info, "reachable": reachable}
+        ok = {a for a, up in zip(info["addresses"], results) if up}
+        local = {a for a in info["addresses"] if _same_subnet(a, info.get("masks", {}).get(a), ha_ip)}
+        ranked = sorted(info["addresses"], key=lambda a: (a not in ok, a not in local))
+        return serial, {**info, "addresses": ranked, "reachable": [a for a in ranked if a in ok], "local": sorted(local)}
 
     return dict(await asyncio.gather(*(probe(s, i) for s, i in candidates.items())))
 
 
 SKIP = "skip"  # dropdown value meaning "do not SSH to this switch"
+
+
+async def _ha_ip(hass) -> str | None:
+    """Home Assistant's own LAN address, to rank the switch interface on the same subnet first."""
+    try:
+        from homeassistant.components.network import async_get_source_ip
+
+        return await async_get_source_ip(hass)
+    except Exception:  # noqa: BLE001 - only used for ordering
+        return None
 
 
 def _field(info: dict, serial: str) -> str:
@@ -144,18 +191,24 @@ def _ssh_schema(defaults: Mapping[str, Any], switches: dict[str, dict]) -> vol.S
         if default is None:
             default = (info.get("reachable") or info["addresses"] or [SKIP])[0]
         reachable = set(info.get("reachable") or [])
-        # Reachable addresses first; typing any other IP/hostname is still allowed (custom_value).
-        addresses = sorted(info["addresses"], key=lambda a: a not in reachable)
+        local = set(info.get("local") or [])
+        # Already ranked by suggest_hosts; typing any other IP/hostname is still allowed (custom_value).
+        addresses = list(info["addresses"])
         if default not in (*addresses, SKIP):
             addresses.insert(0, default)  # a custom address saved earlier
-        options = [
-            SelectOptionDict(
-                value=a,
-                label=f"{a} — answers on the SSH port" if a in reachable else
-                (f"{a} — no answer from Home Assistant" if a in info["addresses"] else f"{a} — entered manually"),
-            )
-            for a in addresses
-        ] + [SelectOptionDict(value=SKIP, label="Don't read this switch")]
+
+        def label(a: str) -> str:
+            if a not in info["addresses"]:
+                return f"{a} — entered manually"
+            parts = [a, info.get("labels", {}).get(a, "")]
+            parts.append("answers on the SSH port" if a in reachable else "no answer from Home Assistant")
+            if a in local:
+                parts.append("same subnet as Home Assistant")
+            return " — ".join(p for p in parts if p)
+
+        options = [SelectOptionDict(value=a, label=label(a)) for a in addresses] + [
+            SelectOptionDict(value=SKIP, label="Don't read this switch")
+        ]
         fields[vol.Optional(_field(info, serial), default=default)] = SelectSelector(
             SelectSelectorConfig(options=options, custom_value=True, mode=SelectSelectorMode.DROPDOWN)
         )
@@ -181,7 +234,10 @@ def _switch_summary(switches: dict[str, dict]) -> str:
     for serial, info in switches.items():
         addrs = ", ".join(info["addresses"]) or "none"
         ok = ", ".join(info.get("reachable") or []) or "none"
-        lines.append(f"- {info['name']} ({serial}): Cirrus reports {addrs}. Answering on the SSH port from Home Assistant: {ok}.")
+        lines.append(
+            f"- {info['name']} ({serial}): {len(info['addresses'])} addresses known ({addrs}). "
+            f"Answering on the SSH port from Home Assistant: {ok}."
+        )
     return "\n".join(lines)
 
 
@@ -325,13 +381,19 @@ class CirrusConfigFlow(ConfigFlow, domain=DOMAIN):
         if self._switches is None:
             site_ids = list(self._data[CONF_SITE_IDS])
             devices = [d for d in self._devices if (d.get("site") or {}).get("id") in site_ids]
-            topologies = []
+            topologies, interfaces = [], []
             for sid in site_ids:
                 try:
                     topologies.append(await self._client.get_topology(self._data[CONF_ORG_ID], sid))
                 except CirrusApiError:
                     pass
-            self._switches = await suggest_hosts(switch_candidates(devices, topologies), DEFAULT_SSH_PORT)
+            try:
+                interfaces = await self._client.get_ip_interfaces(self._data[CONF_ORG_ID], site_ids)
+            except CirrusApiError:
+                interfaces = []
+            self._switches = await suggest_hosts(
+                switch_candidates(devices, topologies, interfaces), DEFAULT_SSH_PORT, await _ha_ip(self.hass)
+            )
         if user_input is not None:
             data = _collect_ssh(user_input, self._switches)
             error, details = await _test_ssh(data, self._switches)
@@ -610,7 +672,13 @@ class CirrusOptionsFlow(OptionsFlow):
             devices = list(data.devices.values()) if data else []
             topologies = list(data.topology.values()) if data else []
             port = int(self.config_entry.options.get(CONF_SSH_PORT, DEFAULT_SSH_PORT))
-            self._switches = await suggest_hosts(switch_candidates(devices, topologies), port)
+            try:
+                interfaces = await coordinator.client.get_ip_interfaces(coordinator.org_id, coordinator.site_ids or list(data.sites))
+            except CirrusApiError:
+                interfaces = []
+            self._switches = await suggest_hosts(
+                switch_candidates(devices, topologies, interfaces), port, await _ha_ip(self.hass)
+            )
         if user_input is not None:
             data = _collect_ssh(user_input, self._switches)
             error, details = await _test_ssh(data, self._switches)

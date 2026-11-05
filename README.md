@@ -115,7 +115,7 @@ The newest result is shown on the Internet → gateway link, and both appear in 
 - Authentication is key-based only. Put the private key somewhere the **Home Assistant container** can read, e.g. `/config/.ssh/id_ed25519`. Keys inside the *Terminal & SSH* add-on are not visible to HA Core.
 - For **SSH certificates**, place the signed certificate next to the key as `<key>-cert.pub` (e.g. `/config/.ssh/id_ed25519-cert.pub`); it is loaded automatically.
 - The account only needs read access (`show` commands).
-- Each switch gets its own **SSH address** field. It is pre-filled with whichever address Cirrus knows for the switch (device IP or LLDP management IPs) that answers on the SSH port from Home Assistant. Type any IP or hostname HA can reach, or clear the field to skip that switch. Every switch with an address is tested before saving, and the exact SSH error is shown if one fails.
+- Each switch gets its own **SSH address** field. It lists every address Cirrus knows for the switch: the device IP, LLDP management IPs, and every IPv4 VLAN interface that is up (labelled with VLAN id and name). Addresses that answer on the SSH port from Home Assistant come first, and one on Home Assistant's own subnet is pre-selected. Type any IP or hostname HA can reach, or clear the field to skip that switch. Every switch with an address is tested before saving, and the exact SSH error is shown if one fails.
 - *known_hosts*: leave blank to skip host-key checking (LAN use), or point at a known_hosts file to verify.
 
 ### Presence tracking

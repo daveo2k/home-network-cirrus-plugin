@@ -162,6 +162,21 @@ class CirrusClient:
                 return vlans
             offset += 100
 
+    async def get_ip_interfaces(self, org_id: str, site_ids: list[str]) -> list[dict]:
+        """Layer-3 interfaces of managed switches (one per routed VLAN, loopback, EMP...)."""
+        result: list[dict] = []
+        offset = 0
+        while True:
+            page = await self._get(
+                f"/ov/v1/organizations/{org_id}/ipInterface",
+                {"limit": 100, "offset": offset, "filters": "{}", "sort": "[]", "scope": "site", "scopeId[]": site_ids},
+            ) or {}
+            rows = page.get("ipInterfaces") or [] if isinstance(page, dict) else []
+            result.extend(rows)
+            if len(rows) < 100 or offset > 5000:
+                return result
+            offset += 100
+
     async def get_wireless_clients(self, org_id: str, site_ids: list[str]) -> list[dict]:
         clients: list[dict] = []
         offset = 0
