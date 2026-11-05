@@ -14,6 +14,7 @@ cd "$(dirname "$0")/.."
 
 MANIFEST=custom_components/ovcirrus/manifest.json
 CONST=custom_components/ovcirrus/const.py
+CARD=custom_components/ovcirrus/frontend/ovcirrus-network-map.js
 BUMP="${1:-patch}"
 TITLE="${2:-}"
 
@@ -75,9 +76,9 @@ PY
 git rev-parse -q --verify "refs/tags/v$NEW" >/dev/null && fail "Tag v$NEW already exists."
 
 step "Bumping version $CURRENT -> $NEW"
-python3 - "$MANIFEST" "$CONST" "$NEW" <<'PY'
+python3 - "$MANIFEST" "$CONST" "$CARD" "$NEW" <<'PY'
 import json, re, sys
-manifest, const, new = sys.argv[1:]
+manifest, const, card, new = sys.argv[1:]
 data = json.load(open(manifest))
 data["version"] = new
 with open(manifest, "w") as fh:
@@ -87,8 +88,12 @@ text = open(const).read()
 text, n = re.subn(r'^VERSION = "[^"]*"', f'VERSION = "{new}"', text, flags=re.M)
 assert n == 1, "VERSION not found in const.py"
 open(const, "w").write(text)
+text = open(card).read()
+text, n = re.subn(r'^const CARD_VERSION = "[^"]*";', f'const CARD_VERSION = "{new}";', text, flags=re.M)
+assert n == 1, "CARD_VERSION not found in the card"
+open(card, "w").write(text)
 PY
-git add "$MANIFEST" "$CONST"
+git add "$MANIFEST" "$CONST" "$CARD"
 git commit -q -m "Release v$NEW"
 git tag -a "v$NEW" -m "v$NEW"
 

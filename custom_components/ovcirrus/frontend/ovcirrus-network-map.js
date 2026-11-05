@@ -9,6 +9,7 @@
  *          height: "fill" makes the map fill its container (used by the sidebar panel),
  *          device_scale (size of gateways/switches/APs/wired devices, default 2; wireless clients stay 1)
  */
+const CARD_VERSION = "0.2.4"; // kept in step with manifest.json by scripts/release.sh
 const CHIP_W = 210; // minimum device box width
 const MAX_CHIP_W = 380; // boxes grow to fit their text up to this (times the text size), then ellipsis
 const BASE = { CHIP_H: 54, LABEL_H: 24, LABEL_ROW: 19 };
@@ -286,7 +287,10 @@ class OvCirrusNetworkMap extends HTMLElement {
         const w = Math.round(this.getBoundingClientRect().width);
         if (w && w !== this._lastW) {
           this._lastW = w;
-          if (this._zoom === null && this._sites) this._render();
+          if (this._sites && (this._zoom == null || this._needsMeasure)) {
+            this._needsMeasure = false;
+            this._render();
+          }
         }
       });
       this._ro.observe(this);
@@ -310,6 +314,7 @@ class OvCirrusNetworkMap extends HTMLElement {
       const res = await this._hass.callWS(msg);
       this._sites = (res.entries || []).flatMap((e) => e.sites.map((s) => ({ ...s, entry: e.title, entry_id: s.entry_id || e.entry_id })));
       this._isAdmin = !!res.is_admin;
+      this._integrationVersion = res.version || null;
       this._nmap = !!res.nmap;
       const cur = this._sites[this._siteIdx];
       if (cur && this._localOffsets) {
@@ -713,9 +718,13 @@ class OvCirrusNetworkMap extends HTMLElement {
          <span class="stat"><ha-icon icon="mdi:access-point"></ha-icon>${s.access_points}</span>
          ${s.new_devices ? `<span class="stat newstat" title="Devices first seen in the last 24 hours">${s.new_devices} new</span>` : ""}`
       : "";
-    const warn = site?.ssh_errors?.length
+    const stale =
+      this._integrationVersion && this._integrationVersion !== CARD_VERSION
+        ? `<div class="warn">This browser is running map card v${esc(CARD_VERSION)}, but the integration is v${esc(this._integrationVersion)}. Refresh the page (Ctrl+Shift+R, or Cmd+Shift+R on a Mac) to load the new card. In the HA app: Settings → Companion app → Debugging → Reset frontend cache.</div>`
+        : "";
+    const warn = stale + (site?.ssh_errors?.length
       ? `<div class="warn" title="${esc(site.ssh_errors.join("\n"))}">MAC table read failed – see log</div>`
-      : "";
+      : "");
 
     const sel = this._selected && this._index?.get(this._selected);
     const g = sel?.graphic;
@@ -882,16 +891,22 @@ class OvCirrusNetworkMap extends HTMLElement {
     const vp = this.shadowRoot.querySelector(".viewport");
     const canvas = this.shadowRoot.querySelector(".canvas");
     if (canvas) {
+      // Only measure when the card is actually laid out: HA often renders it while still hidden,
+      // where every size reads 0 (that used to shrink every box to a thin sliver).
+      const visible = canvas.offsetWidth > 0 && canvas.getClientRects().length > 0;
+      if (!visible) this._needsMeasure = true;
       // Safety net: if a label still renders wider than estimated, grow its box to cover it.
+      // Positions come from the inline styles we set (layout units), widths from the label itself.
       const boxes = new Map([...canvas.querySelectorAll(".group[data-gid]")].map((b) => [b.dataset.gid, b]));
-      for (const l of canvas.querySelectorAll(".elabel[data-gid]")) {
+      for (const l of visible ? canvas.querySelectorAll(".elabel[data-gid]") : []) {
         const box = boxes.get(l.dataset.gid);
-        if (!box) continue;
-        const need = l.offsetLeft + l.offsetWidth + PAD - box.offsetLeft;
-        if (need > box.offsetWidth) box.style.width = `${need}px`;
+        if (!box || !l.offsetWidth) continue;
+        const need = parseFloat(l.style.left) + l.offsetWidth + PAD - parseFloat(box.style.left);
+        if (need > parseFloat(box.style.width)) box.style.width = `${need}px`;
       }
       // Link labels are HTML, so their width is only known after layout: grow the map to fit them.
-      const right = Math.max(0, ...[...canvas.querySelectorAll(".elabel")].map((l) => l.offsetLeft + l.offsetWidth + 12));
+      const labelEls = visible ? [...canvas.querySelectorAll(".elabel")] : [];
+      const right = Math.max(0, ...labelEls.map((l) => parseFloat(l.style.left) + l.offsetWidth + 12));
       const w = parseFloat(canvas.style.width);
       if (right > w) {
         const zoom = this._lastZoom || 1;
@@ -1479,6 +1494,8 @@ class OvCirrusNetworkPanel extends HTMLElement {
 if (!customElements.get("ovcirrus-network-panel")) {
   customElements.define("ovcirrus-network-panel", OvCirrusNetworkPanel);
 }
+
+console.info(`%c OVCIRRUS-NETWORK-MAP %c v${CARD_VERSION} `, "background:#0e6f8f;color:#fff;border-radius:3px 0 0 3px", "background:#ddd;color:#000;border-radius:0 3px 3px 0");
 
 if (!customElements.get("ovcirrus-network-map")) {
   customElements.define("ovcirrus-network-map", OvCirrusNetworkMap);

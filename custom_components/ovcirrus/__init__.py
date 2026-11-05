@@ -224,6 +224,7 @@ def ws_topology(hass: HomeAssistant, connection: websocket_api.ActiveConnection,
             "entries": result,
             "is_admin": bool(connection.user and connection.user.is_admin),
             "nmap": bool(hass.data.get(DOMAIN, {}).get("nmap")),
+            "version": VERSION,
             "types": {k: v[0] for k, v in TYPES.items()},
         },
     )
