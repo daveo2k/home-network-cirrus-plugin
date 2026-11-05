@@ -162,6 +162,10 @@ class CirrusClient:
                 return vlans
             offset += 100
 
+    async def get_rf_details(self, org_id: str, ap_mac: str) -> dict:
+        """Live radio state of one AP: band, channel, width, TX power, utilisation, noise floor."""
+        return await self._get(f"/ov/v1/organizations/{org_id}/wlan-analytics/access-points/rf-details/{ap_mac}") or {}
+
     async def get_ip_interfaces(self, org_id: str, site_ids: list[str]) -> list[dict]:
         """Layer-3 interfaces of managed switches (one per routed VLAN, loopback, EMP...)."""
         result: list[dict] = []

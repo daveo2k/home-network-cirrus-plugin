@@ -140,6 +140,17 @@ class MapExtras:
     unifi_ips: dict[str, str] = field(default_factory=dict)  # MAC -> IP from the gateway
     port_vlans: dict[str, dict] = field(default_factory=dict)  # switch serial -> port -> {"untagged","tagged"}
     vlans: dict[str, dict] = field(default_factory=dict)  # VLAN id -> {"name", "up"}
+    radios: dict[str, list] = field(default_factory=dict)  # AP MAC -> radio dicts from rf-details
+    rf_profiles: dict[str, str] = field(default_factory=dict)  # AP MAC -> RF profile name
+
+
+def radio_text(r: dict) -> str:
+    bits = [f"channel {r.get('channel')}" if r.get("channel") is not None else None,
+            f"{r['bandwidth']} MHz" if r.get("bandwidth") else None,
+            f"{r['txPower']} dBm" if r.get("txPower") is not None else None,
+            f"{r['channelUtilization']}% busy" if r.get("channelUtilization") is not None else None,
+            f"noise {r['noiseFloor']} dBm" if r.get("noiseFloor") is not None else None]
+    return " · ".join(b for b in bits if b)
 
 
 def vlan_text(v: dict | None, names: dict[str, dict]) -> str | None:
@@ -815,6 +826,13 @@ def build_site_map(
         client_count = len(clients_by_ap.get(key, []))
         if client_count:
             details.insert(1, ("Wireless clients", client_count))
+        radios = extras.radios.get(key) or []
+        for i, r in enumerate(radios):
+            band = r.get("band") or r.get("radio") or "Radio"
+            clients_on = sum(1 for c in clients_by_ap.get(key, []) if (c.get("band") or "").lower() == band.lower())
+            details.insert(2 + i, (f"{band} radio", radio_text(r) + (f" · {clients_on} clients" if clients_on else "")))
+        if extras.rf_profiles.get(key):
+            details.append(("RF profile", extras.rf_profiles[key]))
         graphic = None
         if node["kind"] == "switch":
             labels = {}

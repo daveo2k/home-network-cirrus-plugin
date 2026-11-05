@@ -74,6 +74,8 @@ class CirrusData:
     port_vlans: dict[str, dict] = field(default_factory=dict)  # serial -> port -> {"untagged", "tagged"}
     vlans: dict[str, dict] = field(default_factory=dict)  # VLAN id -> {"name", "up"}
     dns_names: dict[str, str] = field(default_factory=dict)  # ip -> PTR name
+    radios: dict[str, list] = field(default_factory=dict)  # AP serial -> [radio dicts]
+    rf_profiles: dict[str, str] = field(default_factory=dict)  # AP serial -> RF profile name
     switch_tables: dict[str, SwitchTables] = field(default_factory=dict)
     ssh_errors: dict[str, str] = field(default_factory=dict)
     unifi: dict = field(default_factory=dict)  # {"wan": {...}, "clients": {mac: {...}}}
@@ -222,6 +224,7 @@ class CirrusCoordinator(DataUpdateCoordinator[CirrusData]):
                     reach = (node.get("reachable") or "").lower()
                     data.node_status[mac] = {"on": "online", "off": "offline"}.get(reach, "unknown")
 
+        await self._update_radios(data, prev)
         await self._update_ssh(data, prev, now)
         await self._update_unifi(data, prev)
         if self.resolver:
@@ -269,6 +272,27 @@ class CirrusCoordinator(DataUpdateCoordinator[CirrusData]):
             data.lldp[serial] = prev.lldp.get(serial, []) if isinstance(res, Exception) else res
         for serial, res in zip(switches, port_results):
             data.ports[serial] = prev.ports.get(serial, []) if isinstance(res, Exception) else res
+
+    async def _update_radios(self, data: CirrusData, prev: CirrusData) -> None:
+        aps = {s: d for s, d in data.devices.items() if d.get("deviceFamily") == "AP" and d.get("macAddress")}
+        sem = asyncio.Semaphore(8)
+
+        async def one(serial: str, dev: dict):
+            async with sem:
+                return serial, await self.client.get_rf_details(self.org_id, dev["macAddress"])
+
+        results = await asyncio.gather(*(one(s, d) for s, d in aps.items()), return_exceptions=True)
+        for (serial, _), res in zip(aps.items(), results):
+            if isinstance(res, Exception):
+                _LOGGER.debug("RF details failed for %s: %s", serial, res)
+                data.radios[serial] = prev.radios.get(serial, [])
+                if serial in prev.rf_profiles:
+                    data.rf_profiles[serial] = prev.rf_profiles[serial]
+                continue
+            rf = res[1] or {}
+            data.radios[serial] = sorted(rf.get("radios") or [], key=lambda r: r.get("radio") or "")
+            if rf.get("rfProfileName"):
+                data.rf_profiles[serial] = rf["rfProfileName"]
 
     async def _update_ssh(self, data: CirrusData, prev: CirrusData, now: float) -> None:
         opts = self.config_entry.options
@@ -454,6 +478,8 @@ class CirrusCoordinator(DataUpdateCoordinator[CirrusData]):
             port_layouts=layouts,
             port_vlans=data.port_vlans,
             vlans=data.vlans,
+            radios={norm_mac(data.devices[s].get("macAddress")): r for s, r in data.radios.items()},
+            rf_profiles={norm_mac(data.devices[s].get("macAddress")): p for s, p in data.rf_profiles.items()},
             entry_id=self.config_entry.entry_id,
             unifi_ips={m: c.get("ip") for m, c in (data.unifi.get("clients") or {}).items() if c.get("ip")},
         )

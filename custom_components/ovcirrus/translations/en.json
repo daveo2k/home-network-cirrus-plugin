@@ -185,7 +185,7 @@
         "name": "IP address"
       },
       "channel": {
-        "name": "Channel"
+        "name": "Channels"
       },
       "wireless_clients": {
         "name": "Wireless clients"

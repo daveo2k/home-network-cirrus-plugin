@@ -6,7 +6,8 @@ Brings Alcatel-Lucent Enterprise **OmniVista Cirrus** data into Home Assistant, 
 
 | Where | Entities / data |
 |---|---|
-| Each AP / switch (HA device) | Online (connectivity), uptime, firmware, IP; APs also get client count (with per-SSID / per-band attributes) and channel |
+| Each AP / switch (HA device) | Online (connectivity), uptime, firmware, IP; APs also get client count (with per-SSID / per-band attributes) and *Channels* (e.g. `1 / 36`) |
+| Each AP radio (2.4 / 5 / 6 GHz) | Channel, clients, channel utilisation, TX power, noise floor, channel width. Radios that appear later are added automatically |
 | Each site | Wireless clients, wired clients (needs SSH MAC tables), one sensor per SSID |
 | Tracked clients (opt-in) | `device_tracker` per chosen client: home/away plus IP, hostname, SSID, AP, RSSI, band, auth type, 802.1X user, VLAN, OS, traffic |
 | Network map card | Internet → gateway → switches → APs / wired devices → clients grouped by SSID, with port + link-speed labels |
@@ -24,6 +25,26 @@ The map is built from:
 4. **HA device registry**: if another integration knows a MAC (router, ESPHome, etc.), its name is used.
 
 Inferred links (from MAC tables rather than LLDP) are dashed. Cirrus does not report the WAN link, so *Internet* is always drawn.
+
+### Adding the map to a dashboard
+
+The card is registered automatically when the integration loads; there is no resource to add.
+
+**On an existing dashboard:** open the dashboard → ✏️ **Edit** → **Add card** → search for **OmniVista Cirrus network map** (or choose **Manual** and enter `type: custom:ovcirrus-network-map`).
+
+**As its own full-screen dashboard:** Settings → **Dashboards** → **Add dashboard** → *New dashboard from scratch*, name it (e.g. "Network"), open it → ✏️ → ⋮ → **Raw configuration editor**, paste this and save:
+
+```yaml
+views:
+  - title: Network
+    path: network
+    type: panel        # one card filling the whole view
+    cards:
+      - type: custom:ovcirrus-network-map
+        height: 820
+```
+
+If the card shows "Custom element doesn't exist", refresh the browser (or clear the frontend cache in the HA app) after restarting Home Assistant.
 
 ### Card
 

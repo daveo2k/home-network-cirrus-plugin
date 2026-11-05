@@ -13,7 +13,13 @@ from homeassistant.components.sensor import (
     SensorEntityDescription,
     SensorStateClass,
 )
-from homeassistant.const import EntityCategory, UnitOfTime
+from homeassistant.const import (
+    PERCENTAGE,
+    SIGNAL_STRENGTH_DECIBELS_MILLIWATT,
+    EntityCategory,
+    UnitOfFrequency,
+    UnitOfTime,
+)
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
@@ -69,13 +75,60 @@ DEVICE_SENSORS: tuple[DeviceSensorDescription, ...] = (
         value_fn=lambda data, dev: dev.get("ipAddress"),
     ),
     DeviceSensorDescription(
+        # Summary of the live channel on every radio, e.g. "1 / 36".
         key="channel",
         translation_key="channel",
         families=("AP",),
-        entity_category=EntityCategory.DIAGNOSTIC,
-        value_fn=lambda data, dev: dev.get("channel"),
+        icon="mdi:wifi-settings",
+        value_fn=lambda data, dev: " / ".join(
+            str(r["channel"]) for r in data.radios.get(dev.get("serialNumber"), []) if r.get("channel") is not None
+        ) or None,
+        attrs_fn=lambda data, dev: {
+            "radios": [
+                {k: r.get(k) for k in ("radio", "band", "channel", "bandwidth", "txPower", "channelUtilization", "noiseFloor")}
+                for r in data.radios.get(dev.get("serialNumber"), [])
+            ],
+            "rf_profile": data.rf_profiles.get(dev.get("serialNumber")),
+        },
     ),
 )
+
+
+@dataclass(frozen=True, kw_only=True)
+class RadioSensorDescription(SensorEntityDescription):
+    value_fn: Callable[[dict, list[dict]], Any]  # (radio, clients on this AP) -> value
+
+
+RADIO_SENSORS: tuple[RadioSensorDescription, ...] = (
+    RadioSensorDescription(key="channel", icon="mdi:wifi", value_fn=lambda r, c: r.get("channel")),
+    RadioSensorDescription(
+        key="clients", icon="mdi:account-multiple", state_class=SensorStateClass.MEASUREMENT,
+        value_fn=lambda r, c: sum(1 for x in c if (x.get("band") or "").lower() == (r.get("band") or "").lower()),
+    ),
+    RadioSensorDescription(
+        key="utilization", icon="mdi:chart-donut", native_unit_of_measurement=PERCENTAGE,
+        state_class=SensorStateClass.MEASUREMENT, value_fn=lambda r, c: r.get("channelUtilization"),
+    ),
+    RadioSensorDescription(
+        key="tx_power", device_class=SensorDeviceClass.SIGNAL_STRENGTH,
+        native_unit_of_measurement=SIGNAL_STRENGTH_DECIBELS_MILLIWATT, state_class=SensorStateClass.MEASUREMENT,
+        entity_category=EntityCategory.DIAGNOSTIC, value_fn=lambda r, c: r.get("txPower"),
+    ),
+    RadioSensorDescription(
+        key="noise_floor", device_class=SensorDeviceClass.SIGNAL_STRENGTH,
+        native_unit_of_measurement=SIGNAL_STRENGTH_DECIBELS_MILLIWATT, state_class=SensorStateClass.MEASUREMENT,
+        entity_category=EntityCategory.DIAGNOSTIC, value_fn=lambda r, c: r.get("noiseFloor"),
+    ),
+    RadioSensorDescription(
+        key="bandwidth", icon="mdi:arrow-expand-horizontal", device_class=SensorDeviceClass.FREQUENCY,
+        native_unit_of_measurement=UnitOfFrequency.MEGAHERTZ, entity_category=EntityCategory.DIAGNOSTIC,
+        value_fn=lambda r, c: r.get("bandwidth"),
+    ),
+)
+RADIO_NAMES = {
+    "channel": "channel", "clients": "clients", "utilization": "channel utilisation",
+    "tx_power": "TX power", "noise_floor": "noise floor", "bandwidth": "channel width",
+}
 
 
 async def async_setup_entry(hass: HomeAssistant, entry, async_add_entities: AddEntitiesCallback) -> None:
@@ -109,6 +162,31 @@ async def async_setup_entry(hass: HomeAssistant, entry, async_add_entities: AddE
 
     _add_ssids()
     entry.async_on_unload(coordinator.async_add_listener(_add_ssids))
+
+    known_radios: set[tuple[str, str]] = set()
+
+    @callback
+    def _add_radios() -> None:
+        # One set of sensors per active radio; radios that appear later are added automatically.
+        new = []
+        for serial, radios in coordinator.data.radios.items():
+            if serial not in coordinator.data.devices:
+                continue
+            bands = [r.get("band") for r in radios]
+            for radio in radios:
+                rid = radio.get("radio") or radio.get("band")
+                if not rid or (serial, rid) in known_radios:
+                    continue
+                known_radios.add((serial, rid))
+                label = radio.get("band") or rid
+                if bands.count(radio.get("band")) > 1:
+                    label = f"{label} ({rid})"  # e.g. two 5 GHz radios on a tri-radio AP
+                new.extend(CirrusRadioSensor(coordinator, serial, rid, label, d) for d in RADIO_SENSORS)
+        if new:
+            async_add_entities(new)
+
+    _add_radios()
+    entry.async_on_unload(coordinator.async_add_listener(_add_radios))
 
 
 class CirrusDeviceSensor(CirrusDeviceEntity, SensorEntity):
@@ -280,3 +358,48 @@ class WanSensor(CoordinatorEntity[CirrusCoordinator], SensorEntity):
     @property
     def native_value(self):
         return self.entity_description.value_fn(self.coordinator.data.unifi.get("wan") or {})
+
+
+class CirrusRadioSensor(CirrusDeviceEntity, SensorEntity):
+    """A value for one radio of an AP (e.g. "2.4GHz channel", "5GHz channel utilisation")."""
+
+    entity_description: RadioSensorDescription
+
+    def __init__(self, coordinator, serial: str, radio_id: str, label: str, description: RadioSensorDescription) -> None:
+        super().__init__(coordinator, serial, f"radio_{radio_id}_{description.key}")
+        self.entity_description = description
+        self.radio_id = radio_id
+        self._attr_name = f"{label} {RADIO_NAMES[description.key]}"
+
+    @property
+    def _radio(self) -> dict | None:
+        return next(
+            (r for r in self.coordinator.data.radios.get(self.serial, []) if (r.get("radio") or r.get("band")) == self.radio_id),
+            None,
+        )
+
+    @property
+    def available(self) -> bool:
+        return super().available and self._radio is not None
+
+    @property
+    def native_value(self):
+        radio = self._radio
+        if radio is None or not self.device:
+            return None
+        return self.entity_description.value_fn(radio, _ap_clients(self.coordinator.data, self.device))
+
+    @property
+    def extra_state_attributes(self):
+        radio = self._radio or {}
+        if self.entity_description.key != "channel":
+            return None
+        return {
+            "radio": radio.get("radio"),
+            "band": radio.get("band"),
+            "bandwidth_mhz": radio.get("bandwidth"),
+            "tx_power_dbm": radio.get("txPower"),
+            "channel_utilisation": radio.get("channelUtilization"),
+            "noise_floor_dbm": radio.get("noiseFloor"),
+            "updated": radio.get("timestamp"),
+        }
