@@ -9,7 +9,7 @@
  *          height: "fill" makes the map fill its container (used by the sidebar panel),
  *          device_scale (size of gateways/switches/APs/wired devices, default 2; wireless clients stay 1)
  */
-const CARD_VERSION = "0.2.5"; // kept in step with manifest.json by scripts/release.sh
+const CARD_VERSION = "0.2.6"; // kept in step with manifest.json by scripts/release.sh
 const CHIP_W = 210; // minimum device box width
 const MAX_CHIP_W = 380; // boxes grow to fit their text up to this (times the text size), then ellipsis
 const BASE = { CHIP_H: 54, LABEL_H: 24, LABEL_ROW: 19 };
