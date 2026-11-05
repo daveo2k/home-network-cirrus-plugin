@@ -100,14 +100,23 @@ def parse_port_vlans(rows: list[dict]) -> dict[str, dict]:
     return result
 
 
-def parse_ssh_hosts(text: str | None) -> dict[str, str]:
-    """Parse 'SERIAL=host, SERIAL2=host2' overrides."""
+def parse_ssh_hosts(value: Any) -> dict[str, str]:
+    """SSH addresses per switch serial.
+
+    Current format: {serial: host} from the setup form ('' means do not SSH to that switch).
+    Older format: 'SERIAL=host' lines; a bare address applies to every switch ('*').
+    """
+    if isinstance(value, dict):
+        return {str(k): str(v or "").strip() for k, v in value.items()}
     result: dict[str, str] = {}
-    for part in (text or "").replace("\n", ",").split(","):
+    for part in (value or "").replace("\n", ",").split(","):
+        part = part.strip()
         if "=" in part:
             serial, host = part.split("=", 1)
             if serial.strip() and host.strip():
                 result[serial.strip()] = host.strip()
+        elif part:
+            result["*"] = part
     return result
 
 
@@ -270,12 +279,13 @@ class CirrusCoordinator(DataUpdateCoordinator[CirrusData]):
             data.switch_tables, data.ssh_errors = prev.switch_tables, prev.ssh_errors
             return
         overrides = parse_ssh_hosts(opts.get(CONF_SSH_HOSTS))
-        targets = {
-            serial: overrides.get(serial) or dev.get("ipAddress")
-            for serial, dev in data.devices.items()
-            if dev.get("deviceFamily") == "AOS"
-        }
-        targets = {s: h for s, h in targets.items() if h}
+        targets = {}
+        for serial, dev in data.devices.items():
+            if dev.get("deviceFamily") != "AOS":
+                continue
+            host = overrides[serial] if serial in overrides else overrides.get("*") or dev.get("ipAddress")
+            if host:  # an empty address in the form means "skip this switch"
+                targets[serial] = host
 
         async def one(serial: str, host: str):
             return serial, await fetch_switch_tables(

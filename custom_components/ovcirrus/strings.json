@@ -24,13 +24,12 @@
       },
       "ssh": {
         "title": "Switch MAC tables (optional)",
-        "description": "Home Assistant can SSH to your OmniSwitches to read `show mac-learning` and `show arp`, so wired clients appear on the network map. Uses key or certificate authentication (a `<key>-cert.pub` next to the key is picked up automatically).\n\nSwitches: {switches}\n\nSwitch addresses default to the IP reported by Cirrus. Override with one `SERIAL=host` per line.",
+        "description": "Home Assistant can SSH to your OmniSwitches to read `show mac-learning` and `show arp`, so wired clients appear on the map. It uses key or certificate authentication; a `<key>-cert.pub` next to the key is picked up automatically.\n\n{switches}\n\nEach switch has its own **SSH address** field, pre-filled with an address that answers from Home Assistant where one was found. Change it to any IP or hostname Home Assistant can reach, or clear it to skip that switch.",
         "data": {
           "ssh_enabled": "Read MAC tables over SSH",
           "ssh_username": "SSH username",
           "ssh_key_path": "Private key path (inside the HA container)",
           "ssh_known_hosts": "known_hosts file (blank = do not verify host key)",
-          "ssh_hosts": "Switch address overrides",
           "ssh_port": "SSH port",
           "ssh_interval": "MAC table refresh interval",
           "ssh_arp": "Also read ARP table (IP addresses)"
@@ -48,8 +47,8 @@
       "invalid_auth": "Cirrus rejected the application ID or secret.",
       "cannot_connect": "Could not reach the Cirrus instance.",
       "no_orgs": "This application cannot see any organizations.",
-      "ssh_failed": "Could not read the MAC table over SSH. Check the address, username and key path (see the log for details).",
-      "ssh_no_switch": "No OmniSwitch found in the selected sites."
+      "ssh_failed": "SSH failed. {ssh_error}. Check the address, username and key path.",
+      "ssh_no_switch": "Enter an SSH address for at least one switch, or turn off MAC table reading."
     },
     "abort": {
       "already_configured": "This organization is already configured.",
@@ -86,13 +85,12 @@
       },
       "ssh": {
         "title": "Switch MAC tables (SSH)",
-        "description": "Switches: {switches}\n\nOverride addresses with one `SERIAL=host` per line.",
+        "description": "Home Assistant can SSH to your OmniSwitches to read `show mac-learning` and `show arp`, so wired clients appear on the map. It uses key or certificate authentication; a `<key>-cert.pub` next to the key is picked up automatically.\n\n{switches}\n\nEach switch has its own **SSH address** field, pre-filled with an address that answers from Home Assistant where one was found. Change it to any IP or hostname Home Assistant can reach, or clear it to skip that switch.",
         "data": {
           "ssh_enabled": "Read MAC tables over SSH",
           "ssh_username": "SSH username",
           "ssh_key_path": "Private key path (inside the HA container)",
           "ssh_known_hosts": "known_hosts file (blank = do not verify host key)",
-          "ssh_hosts": "Switch address overrides",
           "ssh_port": "SSH port",
           "ssh_interval": "MAC table refresh interval",
           "ssh_arp": "Also read ARP table (IP addresses)"
@@ -149,8 +147,8 @@
       }
     },
     "error": {
-      "ssh_failed": "Could not read the MAC table over SSH. Check the address, username and key path (see the log for details).",
-      "ssh_no_switch": "No OmniSwitch found in the selected sites.",
+      "ssh_failed": "SSH failed. {ssh_error}. Check the address, username and key path.",
+      "ssh_no_switch": "Enter an SSH address for at least one switch, or turn off MAC table reading.",
       "dns_failed": "The DNS server did not answer a PTR query. Check the address and that it accepts queries from Home Assistant.",
       "dns_no_server": "Enter at least one DNS server.",
       "invalid_ip": "Not a valid IP address.",

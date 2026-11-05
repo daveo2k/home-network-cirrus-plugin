@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import Mapping
 from typing import Any
@@ -78,57 +79,133 @@ from .topology import client_name
 _LOGGER = logging.getLogger(__name__)
 
 
-def _ssh_schema(defaults: Mapping[str, Any]) -> vol.Schema:
-    return vol.Schema(
+def switch_candidates(devices: list[dict], topologies: list[dict]) -> dict[str, dict]:
+    """Every address Cirrus knows for each OmniSwitch: device IP plus LLDP/topology management IPs."""
+    nodes = {}
+    for topo in topologies:
+        for node in (topo or {}).get("nodes") or []:
+            if node.get("serialNumber"):
+                nodes[node["serialNumber"]] = node
+    result: dict[str, dict] = {}
+    for dev in devices:
+        if dev.get("deviceFamily") != "AOS" or not dev.get("serialNumber"):
+            continue
+        node = nodes.get(dev["serialNumber"], {})
+        addrs = [dev.get("ipAddress"), node.get("ipAddress")]
+        addrs += [a.get("address") for a in node.get("managementAddresses") or []]
+        seen: list[str] = []
+        for addr in addrs:
+            if addr and addr not in seen and addr not in ("0.0.0.0",):
+                seen.append(addr)
+        result[dev["serialNumber"]] = {"name": dev.get("name") or dev["serialNumber"], "addresses": seen}
+    return result
+
+
+async def _port_open(host: str, port: int, timeout: float = 2.5) -> bool:
+    try:
+        _, writer = await asyncio.wait_for(asyncio.open_connection(host, port), timeout)
+    except (OSError, asyncio.TimeoutError):
+        return False
+    writer.close()
+    return True
+
+
+async def suggest_hosts(candidates: dict[str, dict], port: int) -> dict[str, dict]:
+    """Probe each candidate address on the SSH port; mark which ones answer from Home Assistant."""
+
+    async def probe(serial: str, info: dict):
+        results = await asyncio.gather(*(_port_open(a, port) for a in info["addresses"]))
+        reachable = [a for a, ok in zip(info["addresses"], results) if ok]
+        return serial, {**info, "reachable": reachable}
+
+    return dict(await asyncio.gather(*(probe(s, i) for s, i in candidates.items())))
+
+
+def _field(info: dict, serial: str) -> str:
+    """Form field label for a switch's SSH address (shown as-is by the HA frontend)."""
+    return f"SSH address for {info['name']} ({serial})"
+
+
+def _ssh_schema(defaults: Mapping[str, Any], switches: dict[str, dict]) -> vol.Schema:
+    saved = defaults.get(CONF_SSH_HOSTS)
+    saved = saved if isinstance(saved, dict) else {}
+    fields: dict = {
+        vol.Required(CONF_SSH_ENABLED, default=defaults.get(CONF_SSH_ENABLED, False)): BooleanSelector(),
+        vol.Optional(CONF_SSH_USERNAME, default=defaults.get(CONF_SSH_USERNAME, "")): TextSelector(),
+        vol.Optional(CONF_SSH_KEY_PATH, default=defaults.get(CONF_SSH_KEY_PATH, DEFAULT_SSH_KEY_PATH)): TextSelector(),
+    }
+    for serial, info in switches.items():
+        default = defaults.get(_field(info, serial))  # value typed in a previous attempt
+        if default is None:
+            default = saved.get(serial)
+        if default is None:
+            default = (info.get("reachable") or info["addresses"] or [""])[0]
+        fields[vol.Optional(_field(info, serial), default=default)] = TextSelector()
+    fields.update(
         {
-            vol.Required(CONF_SSH_ENABLED, default=defaults.get(CONF_SSH_ENABLED, False)): BooleanSelector(),
-            vol.Optional(CONF_SSH_USERNAME, default=defaults.get(CONF_SSH_USERNAME, "")): TextSelector(),
-            vol.Optional(
-                CONF_SSH_KEY_PATH, default=defaults.get(CONF_SSH_KEY_PATH, DEFAULT_SSH_KEY_PATH)
-            ): TextSelector(),
-            vol.Optional(CONF_SSH_KNOWN_HOSTS, default=defaults.get(CONF_SSH_KNOWN_HOSTS, "")): TextSelector(),
-            vol.Optional(CONF_SSH_HOSTS, default=defaults.get(CONF_SSH_HOSTS, "")): TextSelector(
-                TextSelectorConfig(multiline=True)
-            ),
             vol.Optional(CONF_SSH_PORT, default=defaults.get(CONF_SSH_PORT, DEFAULT_SSH_PORT)): NumberSelector(
                 NumberSelectorConfig(min=1, max=65535, mode=NumberSelectorMode.BOX)
             ),
+            vol.Optional(CONF_SSH_KNOWN_HOSTS, default=defaults.get(CONF_SSH_KNOWN_HOSTS, "")): TextSelector(),
             vol.Optional(
                 CONF_SSH_INTERVAL, default=defaults.get(CONF_SSH_INTERVAL, DEFAULT_SSH_INTERVAL)
             ): NumberSelector(NumberSelectorConfig(min=30, max=3600, step=10, unit_of_measurement="s")),
             vol.Optional(CONF_SSH_ARP, default=defaults.get(CONF_SSH_ARP, True)): BooleanSelector(),
         }
     )
+    return vol.Schema(fields)
 
 
-async def _test_ssh(hass, user_input: dict, devices: list[dict]) -> str | None:
-    """Return an error key, or None if at least one switch answered."""
-    if not user_input.get(CONF_SSH_ENABLED):
-        return None
-    from .coordinator import parse_ssh_hosts
+def _switch_summary(switches: dict[str, dict]) -> str:
+    if not switches:
+        return "No OmniSwitch found in the selected sites."
+    lines = []
+    for serial, info in switches.items():
+        addrs = ", ".join(info["addresses"]) or "none"
+        ok = ", ".join(info.get("reachable") or []) or "none"
+        lines.append(f"- {info['name']} ({serial}): Cirrus reports {addrs}. Answering on the SSH port from Home Assistant: {ok}.")
+    return "\n".join(lines)
 
-    overrides = parse_ssh_hosts(user_input.get(CONF_SSH_HOSTS))
-    hosts = [
-        overrides.get(d.get("serialNumber")) or d.get("ipAddress")
-        for d in devices
-        if d.get("deviceFamily") == "AOS"
-    ]
-    hosts = [h for h in hosts if h]
-    if not hosts:
-        return "ssh_no_switch"
-    try:
+
+def _collect_ssh(user_input: dict, switches: dict[str, dict]) -> dict:
+    """Move the per-switch address fields into CONF_SSH_HOSTS ({serial: host}; '' = skip that switch)."""
+    data = dict(user_input)
+    hosts = {}
+    for serial, info in switches.items():
+        hosts[serial] = (data.pop(_field(info, serial), "") or "").strip()
+    data[CONF_SSH_HOSTS] = hosts
+    data[CONF_SSH_PORT] = int(data.get(CONF_SSH_PORT, DEFAULT_SSH_PORT))
+    return data
+
+
+async def _test_ssh(data: dict, switches: dict[str, dict]) -> tuple[str | None, dict[str, str]]:
+    """Try every switch that has an address. Returns (error key, placeholders)."""
+    if not data.get(CONF_SSH_ENABLED):
+        return None, {}
+    targets = {s: h for s, h in data[CONF_SSH_HOSTS].items() if h}
+    if not targets:
+        return "ssh_no_switch", {}
+
+    async def one(serial: str, host: str):
         await fetch_switch_tables(
-            hosts[0],
-            user_input.get(CONF_SSH_USERNAME, ""),
-            user_input.get(CONF_SSH_KEY_PATH) or None,
-            user_input.get(CONF_SSH_KNOWN_HOSTS) or None,
-            int(user_input.get(CONF_SSH_PORT, DEFAULT_SSH_PORT)),
+            host,
+            data.get(CONF_SSH_USERNAME, ""),
+            data.get(CONF_SSH_KEY_PATH) or None,
+            data.get(CONF_SSH_KNOWN_HOSTS) or None,
+            data[CONF_SSH_PORT],
             include_arp=False,
         )
-    except SshError as err:
-        _LOGGER.warning("SSH test failed: %s", err)
-        return "ssh_failed"
-    return None
+
+    results = await asyncio.gather(*(one(s, h) for s, h in targets.items()), return_exceptions=True)
+    failures = []
+    for (serial, host), res in zip(targets.items(), results):
+        if isinstance(res, Exception):
+            name = switches.get(serial, {}).get("name", serial)
+            failures.append(f"{name} at {host}: {res}")
+            _LOGGER.warning("SSH test failed for %s (%s): %s", serial, host, res)
+    if failures:
+        return "ssh_failed", {"ssh_error": "; ".join(failures)}
+    return None, {}
 
 
 class CirrusConfigFlow(ConfigFlow, domain=DOMAIN):
@@ -142,6 +219,7 @@ class CirrusConfigFlow(ConfigFlow, domain=DOMAIN):
         self._orgs: list[dict] = []
         self._sites: list[dict] = []
         self._devices: list[dict] = []
+        self._switches: dict[str, dict] | None = None
 
     async def async_step_user(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         errors: dict[str, str] = {}
@@ -224,25 +302,31 @@ class CirrusConfigFlow(ConfigFlow, domain=DOMAIN):
 
     async def async_step_ssh(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         errors: dict[str, str] = {}
-        if user_input is not None:
-            site_ids = set(self._data[CONF_SITE_IDS])
+        placeholders: dict[str, str] = {"ssh_error": ""}
+        if self._switches is None:
+            site_ids = list(self._data[CONF_SITE_IDS])
             devices = [d for d in self._devices if (d.get("site") or {}).get("id") in site_ids]
-            error = await _test_ssh(self.hass, user_input, devices)
+            topologies = []
+            for sid in site_ids:
+                try:
+                    topologies.append(await self._client.get_topology(self._data[CONF_ORG_ID], sid))
+                except CirrusApiError:
+                    pass
+            self._switches = await suggest_hosts(switch_candidates(devices, topologies), DEFAULT_SSH_PORT)
+        if user_input is not None:
+            data = _collect_ssh(user_input, self._switches)
+            error, details = await _test_ssh(data, self._switches)
             if error:
                 errors["base"] = error
+                placeholders.update(details)
             else:
-                options = {CONF_SCAN_INTERVAL: DEFAULT_SCAN_INTERVAL, CONF_TRACKED_CLIENTS: [], **user_input}
+                options = {CONF_SCAN_INTERVAL: DEFAULT_SCAN_INTERVAL, CONF_TRACKED_CLIENTS: [], **data}
                 return self.async_create_entry(title=self._data[CONF_ORG_NAME], data=self._data, options=options)
-        switches = ", ".join(
-            f"{d.get('name')} = {d.get('serialNumber')} ({d.get('ipAddress')})"
-            for d in self._devices
-            if d.get("deviceFamily") == "AOS"
-        )
         return self.async_show_form(
             step_id="ssh",
-            data_schema=_ssh_schema(user_input or {}),
+            data_schema=_ssh_schema(user_input or {}, self._switches),
             errors=errors,
-            description_placeholders={"switches": switches or "none found"},
+            description_placeholders={"switches": _switch_summary(self._switches), **placeholders},
         )
 
     async def async_step_reauth(self, entry_data: Mapping[str, Any]) -> ConfigFlowResult:
@@ -500,24 +584,27 @@ class CirrusOptionsFlow(OptionsFlow):
 
     async def async_step_ssh(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         errors: dict[str, str] = {}
+        placeholders: dict[str, str] = {"ssh_error": ""}
         coordinator = self.config_entry.runtime_data
-        devices = list(coordinator.data.devices.values()) if coordinator.data else []
+        if getattr(self, "_switches", None) is None:
+            data = coordinator.data
+            devices = list(data.devices.values()) if data else []
+            topologies = list(data.topology.values()) if data else []
+            port = int(self.config_entry.options.get(CONF_SSH_PORT, DEFAULT_SSH_PORT))
+            self._switches = await suggest_hosts(switch_candidates(devices, topologies), port)
         if user_input is not None:
-            error = await _test_ssh(self.hass, user_input, devices)
+            data = _collect_ssh(user_input, self._switches)
+            error, details = await _test_ssh(data, self._switches)
             if error:
                 errors["base"] = error
+                placeholders.update(details)
             else:
-                return self._save(user_input)
-        switches = ", ".join(
-            f"{d.get('name')} = {d.get('serialNumber')} ({d.get('ipAddress')})"
-            for d in devices
-            if d.get("deviceFamily") == "AOS"
-        )
+                return self._save(data)
         return self.async_show_form(
             step_id="ssh",
-            data_schema=_ssh_schema(user_input or self.config_entry.options),
+            data_schema=_ssh_schema(user_input or self.config_entry.options, self._switches),
             errors=errors,
-            description_placeholders={"switches": switches or "none found"},
+            description_placeholders={"switches": _switch_summary(self._switches), **placeholders},
         )
 
     async def async_step_dns(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
