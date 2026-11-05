@@ -1,0 +1,11 @@
+__pycache__/
+*.py[cod]
+.DS_Store
+.venv/
+venv/
+.idea/
+.vscode/
+*.log
+# local test data / credentials must never be committed
+*.env
+secrets.yaml

@@ -1,0 +1,21 @@
+{
+  "domain": "ovcirrus",
+  "name": "OmniVista Cirrus",
+  "codeowners": [
+    "@daveo2k"
+  ],
+  "config_flow": true,
+  "dependencies": [
+    "frontend",
+    "http",
+    "websocket_api"
+  ],
+  "documentation": "https://github.com/daveo2k/home-network-cirrus-plugin",
+  "integration_type": "hub",
+  "iot_class": "cloud_polling",
+  "issue_tracker": "https://github.com/daveo2k/home-network-cirrus-plugin/issues",
+  "requirements": [
+    "asyncssh>=2.14.0"
+  ],
+  "version": "0.2.0"
+}

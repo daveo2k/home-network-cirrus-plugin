@@ -1,0 +1,230 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "OmniVista Cirrus",
+        "description": "Create an application in Cirrus (user profile → Applications) and enter its App ID and secret.",
+        "data": {
+          "host": "Cirrus instance",
+          "app_id": "Application ID",
+          "app_secret": "Application secret"
+        }
+      },
+      "org": {
+        "title": "Choose organization",
+        "data": {
+          "org_id": "Organization"
+        }
+      },
+      "sites": {
+        "title": "Choose sites",
+        "data": {
+          "site_ids": "Sites"
+        }
+      },
+      "ssh": {
+        "title": "Switch MAC tables (optional)",
+        "description": "Home Assistant can SSH to your OmniSwitches to read `show mac-learning` and `show arp`, so wired clients appear on the network map. Uses key or certificate authentication (a `<key>-cert.pub` next to the key is picked up automatically).\n\nSwitches: {switches}\n\nSwitch addresses default to the IP reported by Cirrus. Override with one `SERIAL=host` per line.",
+        "data": {
+          "ssh_enabled": "Read MAC tables over SSH",
+          "ssh_username": "SSH username",
+          "ssh_key_path": "Private key path (inside the HA container)",
+          "ssh_known_hosts": "known_hosts file (blank = do not verify host key)",
+          "ssh_hosts": "Switch address overrides",
+          "ssh_port": "SSH port",
+          "ssh_interval": "MAC table refresh interval",
+          "ssh_arp": "Also read ARP table (IP addresses)"
+        }
+      },
+      "reauth_confirm": {
+        "title": "Re-authenticate Cirrus",
+        "data": {
+          "app_id": "Application ID",
+          "app_secret": "Application secret"
+        }
+      }
+    },
+    "error": {
+      "invalid_auth": "Cirrus rejected the application ID or secret.",
+      "cannot_connect": "Could not reach the Cirrus instance.",
+      "no_orgs": "This application cannot see any organizations.",
+      "ssh_failed": "Could not read the MAC table over SSH. Check the address, username and key path (see the log for details).",
+      "ssh_no_switch": "No OmniSwitch found in the selected sites."
+    },
+    "abort": {
+      "already_configured": "This organization is already configured.",
+      "cannot_connect": "Could not reach the Cirrus instance.",
+      "reauth_successful": "Re-authentication successful."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "OmniVista Cirrus options",
+        "menu_options": {
+          "general": "Polling",
+          "clients": "Tracked clients (presence)",
+          "ssh": "Switch MAC tables (SSH)",
+          "dns": "Reverse DNS names",
+          "manual": "Servers & manual devices",
+          "unifi": "UniFi gateway (speed test, WAN, client names)"
+        }
+      },
+      "general": {
+        "title": "Polling",
+        "data": {
+          "scan_interval": "Cirrus poll interval",
+          "discovery_interval_hours": "Re-scan services of manual devices every"
+        }
+      },
+      "clients": {
+        "title": "Tracked clients",
+        "description": "Pick wireless clients to create presence (device tracker) entities for. Note: phones using private MAC addresses may change MAC per network.",
+        "data": {
+          "tracked_clients": "Clients"
+        }
+      },
+      "ssh": {
+        "title": "Switch MAC tables (SSH)",
+        "description": "Switches: {switches}\n\nOverride addresses with one `SERIAL=host` per line.",
+        "data": {
+          "ssh_enabled": "Read MAC tables over SSH",
+          "ssh_username": "SSH username",
+          "ssh_key_path": "Private key path (inside the HA container)",
+          "ssh_known_hosts": "known_hosts file (blank = do not verify host key)",
+          "ssh_hosts": "Switch address overrides",
+          "ssh_port": "SSH port",
+          "ssh_interval": "MAC table refresh interval",
+          "ssh_arp": "Also read ARP table (IP addresses)"
+        }
+      },
+      "dns": {
+        "title": "Reverse DNS names",
+        "description": "Resolve client and device IP addresses to names with PTR lookups. Use your gateway ({gateway}) or a DNS server such as Pi-hole or AdGuard that knows your DHCP leases. Several servers can be comma-separated; `host:port` is accepted.",
+        "data": {
+          "dns_mode": "Lookup method",
+          "dns_servers": "DNS server(s)",
+          "dns_prefer": "Prefer DNS names over hostnames reported by clients",
+          "dns_short": "Show short names (drop the domain)"
+        }
+      },
+      "manual": {
+        "title": "Servers & manual devices",
+        "menu_options": {
+          "manual_add": "Add a device",
+          "manual_remove": "Remove devices"
+        }
+      },
+      "manual_add": {
+        "title": "Add a device",
+        "description": "Add a wired device the map should always show, such as a server or NAS. Give an IP and/or MAC address. Leave the switch empty to locate it from the switch MAC table or ARP. Service discovery runs a quick TCP check of about 40 common service ports on this device only.",
+        "data": {
+          "name": "Name",
+          "ip": "IP address",
+          "mac": "MAC address",
+          "type": "Device type",
+          "switch": "Switch",
+          "port": "Switch port (e.g. 1/1/22)",
+          "discover": "Discover running services",
+          "notes": "Notes"
+        }
+      },
+      "manual_remove": {
+        "title": "Remove devices",
+        "data": {
+          "remove": "Devices to remove"
+        }
+      },
+      "unifi": {
+        "title": "UniFi gateway",
+        "description": "Read WAN status, ISP, WAN IP, the gateway's last speed test and UniFi's client names from your UniFi gateway ({gateway}). Use a local account with read-only (View Only) access. Leave the password blank to keep the saved one.",
+        "data": {
+          "unifi_enabled": "Connect to the UniFi gateway",
+          "unifi_host": "Gateway address",
+          "unifi_username": "Username",
+          "unifi_password": "Password",
+          "unifi_site": "UniFi site name",
+          "unifi_verify_ssl": "Verify the gateway's HTTPS certificate"
+        }
+      }
+    },
+    "error": {
+      "ssh_failed": "Could not read the MAC table over SSH. Check the address, username and key path (see the log for details).",
+      "ssh_no_switch": "No OmniSwitch found in the selected sites.",
+      "dns_failed": "The DNS server did not answer a PTR query. Check the address and that it accepts queries from Home Assistant.",
+      "dns_no_server": "Enter at least one DNS server.",
+      "invalid_ip": "Not a valid IP address.",
+      "invalid_mac": "Not a valid MAC address.",
+      "ip_or_mac": "Enter an IP address, a MAC address, or both.",
+      "discover_needs_ip": "Service discovery needs an IP address.",
+      "unifi_auth": "The UniFi gateway rejected the username or password.",
+      "unifi_connect": "Could not reach the UniFi gateway at that address."
+    },
+    "abort": {
+      "no_manual_devices": "There are no manually added devices."
+    }
+  },
+  "entity": {
+    "binary_sensor": {
+      "online": {
+        "name": "Online"
+      },
+      "wan": {
+        "name": "Internet"
+      }
+    },
+    "sensor": {
+      "clients": {
+        "name": "Clients"
+      },
+      "uptime": {
+        "name": "Uptime"
+      },
+      "firmware": {
+        "name": "Firmware"
+      },
+      "ip_address": {
+        "name": "IP address"
+      },
+      "channel": {
+        "name": "Channel"
+      },
+      "wireless_clients": {
+        "name": "Wireless clients"
+      },
+      "wired_clients": {
+        "name": "Wired clients"
+      },
+      "new_devices": {
+        "name": "New devices (24h)"
+      },
+      "wan_download": {
+        "name": "WAN download"
+      },
+      "wan_upload": {
+        "name": "WAN upload"
+      },
+      "wan_latency": {
+        "name": "WAN latency"
+      },
+      "speedtest_time": {
+        "name": "Last speed test"
+      },
+      "wan_ip": {
+        "name": "WAN IP"
+      },
+      "isp": {
+        "name": "ISP"
+      }
+    }
+  },
+  "selector": {
+    "dns_mode": {
+      "options": {
+        "off": "Off",
+        "system": "Home Assistant's system resolver",
+        "server": "Specific DNS server(s)"
+      }
+    }
+  }
+}
