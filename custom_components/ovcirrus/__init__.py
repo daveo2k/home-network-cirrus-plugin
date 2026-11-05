@@ -130,17 +130,23 @@ async def async_setup_entry(hass: HomeAssistant, entry: CirrusConfigEntry) -> bo
     entry.runtime_data = coordinator
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     entry.async_on_unload(entry.add_update_listener(_async_reload))
-    await _async_update_panel(hass)
+    await _async_update_panel(hass, loading=entry.entry_id)
     return True
 
 
-async def _async_update_panel(hass: HomeAssistant, unloading: str | None = None) -> None:
-    """Show the full-screen map in the sidebar if any loaded entry asks for it."""
+async def _async_update_panel(
+    hass: HomeAssistant, unloading: str | None = None, loading: str | None = None
+) -> None:
+    """Show the full-screen map in the sidebar if any loaded entry asks for it.
+
+    `loading` is the entry being set up right now: it is still SETUP_IN_PROGRESS at this point,
+    so it must be counted explicitly (checking LOADED alone meant the panel was never added).
+    """
     wanted = [
         e
         for e in hass.config_entries.async_entries(DOMAIN)
         if e.entry_id != unloading
-        and e.state is ConfigEntryState.LOADED
+        and (e.entry_id == loading or e.state is ConfigEntryState.LOADED)
         and e.options.get(CONF_SHOW_PANEL, True)
     ]
     data = hass.data.setdefault(DOMAIN, {})
