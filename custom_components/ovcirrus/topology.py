@@ -327,6 +327,7 @@ def _wireless_node(client: dict, ha_names: dict[str, str], names: Names | None =
         "dev_type": ident.get("type"),
         "where": f"{client.get('ssid')} via {client.get('apLocation') or client.get('apName')}",
         "vlan": client.get("vlanId") or None,
+        "band": client.get("band") or None,
         "editable": True,
         "details": [[k, str(v)] for k, v in details if v not in (None, "", " / ", "None")],
         "groups": [],

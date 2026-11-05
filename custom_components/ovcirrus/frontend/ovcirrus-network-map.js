@@ -32,6 +32,12 @@ function applyFontScale(fs) {
   LABEL_ROW = Math.round(BASE.LABEL_ROW * Math.max(0.85, fs));
 }
 const BUNDLE_STEP = 16; // spacing between parallel link lines
+const BAND_GAP = 2 * 22 + 1; // space between frequency-band sections in a client box (gap, dotted line, gap)
+const bandLabel = (b) => (b ? String(b).replace(/\s*ghz$/i, " GHz").replace(/^(\d)ghz/i, "$1 GHz") : "Other");
+const bandOrder = (b) => {
+  const n = parseFloat(b);
+  return isNaN(n) ? 99 : n;
+};
 
 // Devices drawn at device_scale (default 2x); wireless clients and the Internet node stay normal size.
 const BIG_KINDS = new Set(["gateway", "switch", "ap", "bridge", "endpoint", "manual"]);
@@ -439,13 +445,37 @@ class OvCirrusNetworkMap extends HTMLElement {
   _measureGroup(g) {
     const n = g.children.length;
     if (g.leaf) {
-      g._cols = Math.min(this._config.max_columns, n);
-      g._rows = Math.ceil(n / g._cols);
       // Columns share the width of the widest client in the box so the grid stays aligned.
       g._colW = Math.max(...g.children.map((c) => c._cw));
-      g._w = g._cols * g._colW + (g._cols - 1) * GAP_X + 2 * PAD;
       g._rowH = Math.max(...g.children.map((c) => c._ch || CHIP_H));
-      g._h = LABEL_H + PAD + g._rows * g._rowH + (g._rows - 1) * ROW_GAP + PAD;
+      const bandH = Math.round(18 * Math.max(0.85, FS));
+      if (g.children.some((c) => c.kind === "wireless" && c.band)) {
+        // Wireless clients: one section per frequency band, side by side, each labelled.
+        const byBand = new Map();
+        for (const c of g.children) {
+          const key = bandLabel(c.band);
+          if (!byBand.has(key)) byBand.set(key, []);
+          byBand.get(key).push(c);
+        }
+        g._sections = [...byBand.entries()]
+          .sort((a, b) => bandOrder(a[0]) - bandOrder(b[0]))
+          .map(([label, kids]) => {
+            const cols = Math.min(this._config.max_columns, kids.length);
+            return { label, kids, cols, rows: Math.ceil(kids.length / cols), w: cols * g._colW + (cols - 1) * GAP_X };
+          });
+        g._rows = Math.max(...g._sections.map((x) => x.rows));
+        g._bandH = bandH;
+        const inner = g._sections.reduce((a, x) => a + x.w, 0) + BAND_GAP * (g._sections.length - 1);
+        g._w = inner + 2 * PAD;
+      } else {
+        g._sections = null;
+        g._bandH = 0;
+        g._cols = Math.min(this._config.max_columns, n);
+        g._rows = Math.ceil(n / g._cols);
+        g._w = g._cols * g._colW + (g._cols - 1) * GAP_X + 2 * PAD;
+      }
+      g._above = LABEL_H + PAD + g._bandH;
+      g._h = g._above + g._rows * g._rowH + (g._rows - 1) * ROW_GAP + PAD;
     } else {
       g.children.forEach((c) => {
         this._measure(c);
@@ -498,8 +528,8 @@ class OvCirrusNetworkMap extends HTMLElement {
       for (const g of node._groups) {
         g._x = trunkX + TRUNK / 2 + ox;
         g._y = gy + oy;
-        this._placeLeaves(g, g._y + LABEL_H + PAD, out);
-        this._wrap(g, LABEL_H + PAD);
+        this._placeLeaves(g, g._y + (g._above || LABEL_H + PAD), out);
+        this._wrap(g, g._above || LABEL_H + PAD);
         out.groups.push(g);
         out.trunks.push({ node, g });
         gy += g._h + 34;
@@ -509,7 +539,7 @@ class OvCirrusNetworkMap extends HTMLElement {
     let x = cx - node._gw / 2;
     const gy = y + node._ch + V_GAP;
     for (const g of node._groups) {
-      const above = LABEL_H + PAD + (g.leaf ? 0 : g._rowsH || 0);
+      const above = g.leaf ? g._above || LABEL_H + PAD : LABEL_H + PAD + (g._rowsH || 0);
       const chipY = gy + above;
       out.groups.push(g);
       if (g.leaf) {
@@ -542,6 +572,31 @@ class OvCirrusNetworkMap extends HTMLElement {
   }
 
   _placeLeaves(g, chipY, out) {
+    if (g._sections) {
+      g._bandMarks = [];
+      g._seps = [];
+      let x = g._x + PAD;
+      g._sections.forEach((sec, si) => {
+        g._bandMarks.push({ label: sec.label, count: sec.kids.length, x, y: chipY });
+        sec.kids.forEach((c, i) => {
+          const col = i % sec.cols;
+          const row = Math.floor(i / sec.cols);
+          c._x = x + col * (g._colW + GAP_X);
+          c._rw = g._colW;
+          c._y = chipY + g._bandH + row * ((g._rowH || CHIP_H) + ROW_GAP);
+          c._groups = [];
+          out.nodes.push(c);
+        });
+        x += sec.w;
+        if (si < g._sections.length - 1) {
+          g._seps.push({ x: x + BAND_GAP / 2 });
+          x += BAND_GAP;
+        }
+      });
+      return;
+    }
+    g._bandMarks = null;
+    g._seps = null;
     g.children.forEach((c, i) => {
       const col = i % g._cols;
       const row = Math.floor(i / g._cols);
@@ -564,7 +619,13 @@ class OvCirrusNetworkMap extends HTMLElement {
     const sy = Math.max(0, Math.ceil((20 - Math.min(...ys)) / g) * g);
     if (sx || sy) {
       out.nodes.forEach((n) => ((n._x += sx), (n._y += sy)));
-      out.groups.forEach((g) => ((g._bx += sx), (g._x += sx), (g._y += sy)));
+      out.groups.forEach((g) => {
+        g._bx += sx;
+        g._x += sx;
+        g._y += sy;
+        (g._bandMarks || []).forEach((m) => ((m.x += sx), (m.y += sy)));
+        (g._seps || []).forEach((m) => (m.x += sx));
+      });
     }
     for (const e of out.edges) {
       if (e.toGroup) {
@@ -685,7 +746,11 @@ class OvCirrusNetworkMap extends HTMLElement {
       const groups = out.groups
         .map(
           (g) => `<div class="group" data-gid="${esc(g.id)}" style="left:${g._bx}px;top:${g._y}px;width:${g._bw}px;height:${g._h}px">
-            <div class="glabel"><ha-icon icon="${esc(g.icon)}"></ha-icon><span>${esc(g.label)}</span></div></div>`
+            <div class="glabel"><ha-icon icon="${esc(g.icon)}"></ha-icon><span>${esc(g.label)}</span></div>${(g._bandMarks || [])
+              .map((m) => `<div class="band" style="left:${m.x - g._bx}px;top:${m.y - g._y}px">${esc(m.label)} <span>(${m.count})</span></div>`)
+              .join("")}${(g._seps || [])
+              .map((m) => `<div class="bandsep" style="left:${m.x - g._bx}px;top:${LABEL_H + PAD - 2}px;bottom:${PAD - 2}px"></div>`)
+              .join("")}</div>`
         )
         .join("");
 
@@ -1470,6 +1535,10 @@ const STYLE = `
     font-size:calc(12px * var(--fs, 1)); line-height:calc(16px * var(--fs, 1)); color:var(--primary-color); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
     background:var(--card-background-color); padding-right:4px; /* sits above connector lines entering the box */ }
   .glabel ha-icon { --mdc-icon-size:16px; }
+  .band { position:absolute; font-size:calc(11px * var(--fs, 1)); font-weight:600; letter-spacing:.03em; text-transform:uppercase;
+    color:var(--secondary-text-color); white-space:nowrap; line-height:1.2; }
+  .band span { font-weight:400; }
+  .bandsep { position:absolute; width:0; border-left:2px dotted color-mix(in srgb, var(--secondary-text-color) 55%, transparent); }
   .node { position:absolute; z-index:1; width:${CHIP_W}px; height:${CHIP_H}px; display:flex; align-items:center; gap:10px;
     box-sizing:border-box; padding:4px 6px; border-radius:28px; cursor:pointer; }
   .node:hover, .node.selected { background:var(--secondary-background-color); }
