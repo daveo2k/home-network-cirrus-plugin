@@ -7,7 +7,8 @@
  *          layout_editing ("admin" default, true, or false: who may drag devices and save the layout),
  *          snap_to_grid (default true), grid_size (px, default 20),
  *          height: "fill" makes the map fill its container (used by the sidebar panel),
- *          device_scale (size of gateways/switches/APs/wired devices, default 2; wireless clients stay 1)
+ *          device_scale (size of gateways/switches/APs/wired devices, default 2),
+ *          client_scale (size of wireless and wired clients, default 1); viewers can change both
  */
 const CARD_VERSION = "0.2.6"; // kept in step with manifest.json by scripts/release.sh
 const CHIP_W = 210; // minimum device box width
@@ -36,8 +37,13 @@ const BUNDLE_STEP = 16; // spacing between parallel link lines
 const BIG_KINDS = new Set(["gateway", "switch", "ap", "bridge", "endpoint", "manual"]);
 let DEVICE_SCALE = 2;
 const DS_MIN = 1, DS_MAX = 3, DS_STEP = 0.25, DS_KEY = "ovcirrus-device-scale";
-const ringSize = (n) => (BIG_KINDS.has(n.kind) ? Math.round(42 * DEVICE_SCALE) : 42);
-const chipH = (n) => (BIG_KINDS.has(n.kind) ? Math.max(CHIP_H, ringSize(n) + 14) : CHIP_H);
+const CLIENT_KINDS = new Set(["wireless", "wired"]);
+let CLIENT_SCALE = 1;
+const CS_MIN = 0.75, CS_MAX = 2.5, CS_STEP = 0.25, CS_KEY = "ovcirrus-client-scale";
+const ringSize = (n) =>
+  BIG_KINDS.has(n.kind) ? Math.round(42 * DEVICE_SCALE) : CLIENT_KINDS.has(n.kind) ? Math.round(42 * CLIENT_SCALE) : 42;
+const chipH = (n) =>
+  BIG_KINDS.has(n.kind) ? Math.max(CHIP_H, ringSize(n) + 14) : CLIENT_KINDS.has(n.kind) ? Math.max(CHIP_H, ringSize(n) + 12) : CHIP_H;
 
 // Devices that can be dragged: infrastructure, wired and manual devices. Wireless clients follow their AP.
 const SNAP_KEY = "ovcirrus-snap-to-grid";
@@ -249,6 +255,13 @@ class OvCirrusNetworkMap extends HTMLElement {
       storedDs = null;
     }
     this._ds = Math.min(DS_MAX, Math.max(DS_MIN, storedDs || Number(this._config.device_scale) || 2));
+    let storedCs = null;
+    try {
+      storedCs = Number(localStorage.getItem(CS_KEY)) || null;
+    } catch (e) {
+      storedCs = null;
+    }
+    this._cs = Math.min(CS_MAX, Math.max(CS_MIN, storedCs || Number(this._config.client_scale) || 1));
     this._applyFill();
     let stored = null;
     try {
@@ -390,7 +403,7 @@ class OvCirrusNetworkMap extends HTMLElement {
     const big = BIG_KINDS.has(n.kind);
     const outer = ring + (big ? 6 : 4);
     const gap = big ? 14 : 10;
-    const max = MAX_CHIP_W * Math.max(1, FS) + (big ? outer - 46 : 0);
+    const max = MAX_CHIP_W * Math.max(1, FS) + Math.max(0, outer - 46); // allow for bigger rings
     return Math.round(Math.min(max, Math.max(CHIP_W, 12 + outer + gap + text + toggle + 10)));
   }
 
@@ -428,7 +441,8 @@ class OvCirrusNetworkMap extends HTMLElement {
       // Columns share the width of the widest client in the box so the grid stays aligned.
       g._colW = Math.max(...g.children.map((c) => c._cw));
       g._w = g._cols * g._colW + (g._cols - 1) * GAP_X + 2 * PAD;
-      g._h = LABEL_H + PAD + g._rows * CHIP_H + (g._rows - 1) * ROW_GAP + PAD;
+      g._rowH = Math.max(...g.children.map((c) => c._ch || CHIP_H));
+      g._h = LABEL_H + PAD + g._rows * g._rowH + (g._rows - 1) * ROW_GAP + PAD;
     } else {
       g.children.forEach((c) => {
         this._measure(c);
@@ -531,7 +545,7 @@ class OvCirrusNetworkMap extends HTMLElement {
       const [dx, dy] = this._off(c.id); // wired clients can be moved on their own
       c._x = g._x + PAD + col * (g._colW + GAP_X) + dx;
       c._rw = g._colW;
-      c._y = chipY + row * (CHIP_H + ROW_GAP) + dy;
+      c._y = chipY + row * ((g._rowH || CHIP_H) + ROW_GAP) + dy;
       c._groups = [];
       out.nodes.push(c);
     });
@@ -596,6 +610,7 @@ class OvCirrusNetworkMap extends HTMLElement {
       };
       walk(root);
       DEVICE_SCALE = this._ds || 2;
+      CLIENT_SCALE = this._cs || 1;
       for (const n of this._index.values()) {
         n._ch = chipH(n);
         n._cw = this._chipWidth(n);
@@ -688,7 +703,8 @@ class OvCirrusNetworkMap extends HTMLElement {
             (sv !== null && n.vlan ? (String(n.vlan) === String(sv) ? " vmatch" : " dim") : "");
           const big = BIG_KINDS.has(n.kind) ? " big" : "";
           const square = n.graphic?.type === "switch" ? " square" : ""; // rounded-square icon (switches)
-          return `<div class="node ${esc(n.kind)}${big}${square}${sel}" data-id="${esc(n.id)}" style="left:${n._x}px;top:${n._y}px;width:${n._rw || n._cw}px;height:${n._ch || CHIP_H}px;--rs:${ringSize(n)}px">
+          const client = CLIENT_KINDS.has(n.kind) ? " client" : "";
+          return `<div class="node ${esc(n.kind)}${big}${square}${client}${sel}" data-id="${esc(n.id)}" style="left:${n._x}px;top:${n._y}px;width:${n._rw || n._cw}px;height:${n._ch || CHIP_H}px;--rs:${ringSize(n)}px">
               <div class="ring ${esc(n.status)} ${n.graphic ? "g-" + esc(n.graphic.type) : ""}"${big ? ` style="--rs:${ringSize(n)}px;--bs:${Math.round(16 * DEVICE_SCALE)}px"` : ""}>${n.graphic ? deviceGraphic(n, true) : `<ha-icon icon="${esc(n.icon)}"></ha-icon>`}${badge}</div>
               <div class="txt"><div class="name" title="${esc(n.name)}">${esc(n.name)}</div>
               <div class="sub" title="${esc(n.subtitle)}">${esc(n.subtitle)}</div></div>${toggle}</div>`;
@@ -872,6 +888,7 @@ class OvCirrusNetworkMap extends HTMLElement {
               : ""
           }<div class="zoom">
             <span class="grp" title="Map text size"><button data-font="-" title="Smaller map text" aria-label="Smaller map text">A−</button><button data-font="+" title="Larger map text" aria-label="Larger map text">A+</button></span>
+            <span class="grp" title="Client size: ${this._cs}×"><ha-icon icon="mdi:cellphone"></ha-icon><button data-csize="-" title="Smaller clients" aria-label="Smaller clients">−</button><button data-csize="+" title="Larger clients" aria-label="Larger clients">+</button></span>
             <span class="grp" title="Device size: ${this._ds}×"><ha-icon icon="mdi:access-point"></ha-icon><button data-dsize="-" title="Smaller devices and client counts" aria-label="Smaller devices">−</button><button data-dsize="+" title="Larger devices and client counts" aria-label="Larger devices">+</button></span>
             <span class="grp" title="Zoom"><ha-icon icon="mdi:magnify"></ha-icon><button data-zoom="-" title="Zoom out" aria-label="Zoom out">−</button><button data-zoom="fit" title="Fit to width">fit</button><button data-zoom="+" title="Zoom in" aria-label="Zoom in">+</button></span>
           </div>
@@ -1198,6 +1215,18 @@ class OvCirrusNetworkMap extends HTMLElement {
       await Promise.race([purge, new Promise((r) => setTimeout(r, 1500))]);
       window.location.reload();
     });
+    root.querySelectorAll("[data-csize]").forEach((b) =>
+      b.addEventListener("click", () => {
+        const step = b.dataset.csize === "+" ? CS_STEP : -CS_STEP;
+        this._cs = Math.min(CS_MAX, Math.max(CS_MIN, (this._cs || 1) + step));
+        try {
+          localStorage.setItem(CS_KEY, String(this._cs));
+        } catch (e) {
+          // storage blocked: the size still applies until the page reloads
+        }
+        this._render();
+      })
+    );
     root.querySelectorAll("[data-dsize]").forEach((b) =>
       b.addEventListener("click", () => {
         const step = b.dataset.dsize === "+" ? DS_STEP : -DS_STEP;
@@ -1354,6 +1383,10 @@ const STYLE = `
   .ring.offline { border-color:var(--error-color,#db4437); }
   .ring ha-icon { --mdc-icon-size:22px; }
   .ring svg.mini { width:30px; height:30px; }
+  .node.client .ring { width:var(--rs); height:var(--rs); }
+  .node.client .ring ha-icon { --mdc-icon-size:calc(var(--rs) * 0.52); }
+  .node.client .ring img.logo { width:calc(var(--rs) * 0.38); height:calc(var(--rs) * 0.38); right:-5px; bottom:-5px; }
+  .node.client .new { font-size:calc(var(--rs) * 0.2); }
   .ring.g-switch { border-radius:10px; width:46px; }
   .ring.g-switch svg.mini { width:40px; height:20px; }
   .sw-body { fill:var(--ovc-device-body,#2f363d); stroke:var(--ovc-device-edge,#1b2025); stroke-width:1; }
