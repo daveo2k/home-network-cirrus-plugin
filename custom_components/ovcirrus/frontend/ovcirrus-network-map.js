@@ -746,7 +746,7 @@ class OvCirrusNetworkMap extends HTMLElement {
       const msg = { type: "ovcirrus/topology" };
       if (this._config.entry_id) msg.entry_id = this._config.entry_id;
       const res = await this._hass.callWS(msg);
-      this._sites = (res.entries || []).flatMap((e) => e.sites.map((s) => ({ ...s, entry: e.title, entry_id: s.entry_id || e.entry_id })));
+      this._sites = (res.entries || []).flatMap((e) => e.sites.map((s) => ({ ...s, entry: e.title, entry_id: s.entry_id || e.entry_id, port_names: e.port_names || {} })));
       this._isAdmin = !!res.is_admin;
       this._integrationVersion = res.version || null;
       this._applyServerView(res.view || {});
@@ -1623,7 +1623,7 @@ class OvCirrusNetworkMap extends HTMLElement {
         ${this._isAdmin ? `<button class="act" data-viewsave title="Every browser and device starts with these sizes">Save as default for all devices</button>` : ""}
         <button class="act ghost" data-viewreset>${saved ? "Use saved default" : "Reset"}</button>
         <div class="muted">${this._viewSaved ? "Saved as the default for all devices." : "Changes are remembered in this browser."}${saved ? ` Saved default: text ${viewText(sv) || TEXT_DEFAULT}pt, clients ${svCs || 1}×, devices ${svDs || 1}×.` : ""}</div>
-      </div>${this._isAdmin ? `
+      </div>${this._isAdmin ? this._myPortsBlock() : ""}${this._isAdmin ? `
       <div class="vfoot backup">
         <div class="vlab">Backup &amp; restore<small>settings, manual devices, names, layout and your device images; never your Cirrus or UniFi credentials</small></div>
         <div class="vbtns"><button class="act" data-backup ${this._backupBusy ? "disabled" : ""}>Download backup</button>
@@ -1631,6 +1631,25 @@ class OvCirrusNetworkMap extends HTMLElement {
         <input type="file" accept=".json,application/json" data-restorefile hidden>
         ${this._backupMsg ? `<div class="muted${this._backupMsg.error ? " err" : ""}">${esc(this._backupMsg.text)}</div>` : ""}
       </div>` : ""}</div>`;
+  }
+
+  _myPortsBlock() {
+    const names = this._sites?.[this._siteIdx]?.port_names || {};
+    const rows = Object.entries(names)
+      .sort((a, b) => Number(a[0]) - Number(b[0]))
+      .map(([port, name]) => `<div class="myport"><b>${esc(port)}</b><span>${esc(name)}</span>
+        <button class="linkbtn" data-myportdel="${esc(port)}" aria-label="Remove port ${esc(port)}">remove</button></div>`)
+      .join("");
+    return `<div class="vfoot myports">
+        <div class="vlab">Your ports<small>names used on every device; quick and full scans also check these ports</small></div>
+        ${rows || `<div class="muted">None yet. Add one below, or use “Name this port” on a scan result.</div>`}
+        <form class="myportadd" data-myportform>
+          <input type="number" id="ovc-myport" min="1" max="65535" placeholder="Port" required aria-label="Port number">
+          <input type="text" id="ovc-myportname" maxlength="60" placeholder="Service, e.g. Nginx Proxy Manager" required aria-label="Service name">
+          <button class="act" type="submit">Add</button>
+        </form>
+        ${this._myPortMsg ? `<div class="muted${this._myPortMsg.error ? " err" : ""}">${esc(this._myPortMsg.text)}</div>` : ""}
+      </div>`;
   }
 
   _canEditLayout() {
@@ -2046,6 +2065,27 @@ class OvCirrusNetworkMap extends HTMLElement {
       this._backupBusy = false;
       this._render();
     });
+    // your own port list (every device)
+    const myPort = async (port, label) => {
+      try {
+        await this._hass.callWS({ type: "ovcirrus/label_port", entry_id: entryId, port, label, all_devices: true });
+        this._myPortMsg = label ? { text: `Port ${port} saved. Scans from now on check it.` } : { text: `Port ${port} removed.` };
+      } catch (err) {
+        this._myPortMsg = { text: `Could not save: ${err?.message || err}`, error: true };
+      }
+      this._editing = false;
+      await this._fetch();
+      this._render();
+    };
+    const myForm = root.querySelector("[data-myportform]");
+    myForm?.addEventListener("focusin", () => (this._editing = true)); // pause refresh re-renders while typing
+    myForm?.addEventListener("submit", (ev) => {
+      ev.preventDefault();
+      const port = Number(root.getElementById("ovc-myport").value);
+      const label = root.getElementById("ovc-myportname").value.trim();
+      if (port >= 1 && port <= 65535 && label) myPort(port, label);
+    });
+    root.querySelectorAll("[data-myportdel]").forEach((b) => b.addEventListener("click", () => myPort(Number(b.dataset.myportdel), null)));
     root.querySelector("[data-viewreset]")?.addEventListener("click", () => {
       forgetLocal();
       const sv = this._serverView || {};
@@ -2210,7 +2250,14 @@ const STYLE = `
   .viewbtn.on { border-color:var(--primary-color); color:var(--primary-color); }
   .viewmenu { position:absolute; right:0; top:calc(100% + 6px); z-index:6; width:290px; padding:10px 12px; border-radius:12px;
     background:var(--card-background-color); border:1px solid var(--divider-color); box-shadow:0 8px 24px rgba(0,0,0,.18);
-    display:grid; gap:8px; color:var(--primary-text-color); font-size:13px; }
+    display:grid; gap:8px; color:var(--primary-text-color); font-size:13px; max-height:calc(100vh - 140px); overflow-y:auto; }
+  .myport { display:grid; grid-template-columns:minmax(44px,auto) 1fr auto; gap:8px; align-items:baseline; }
+  .myport b { font-variant-numeric:tabular-nums; }
+  .myport span { overflow-wrap:anywhere; }
+  .myportadd { display:grid; grid-template-columns:72px 1fr auto; gap:6px; align-items:center; }
+  .myportadd input { font:inherit; min-width:0; padding:5px 6px; border-radius:6px; border:1px solid var(--divider-color);
+    background:var(--card-background-color); color:var(--primary-text-color); }
+  .myportadd .act { margin-top:0; }
   .vrow { display:flex; align-items:center; justify-content:space-between; gap:10px; }
   .vlab { display:grid; font-weight:600; }
   .vlab small { font-weight:400; font-size:11px; color:var(--secondary-text-color); }

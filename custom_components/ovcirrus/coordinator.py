@@ -670,7 +670,8 @@ class CirrusCoordinator(DataUpdateCoordinator[CirrusData]):
             return self.services_view().get(ip) or {}
         self._scanning.add(ip)
         try:
-            result = await (full_scan(ip) if mode == "full" else discover(ip))
+            mine = {int(p) for p in self.store.port_labels.get("*", {}) if str(p).isdigit()}
+            result = await (full_scan(ip, mine) if mode == "full" else discover(ip, mine))
             self.store.set_services(ip, result)
             self.rebuild()
             return self.services_view().get(ip, result)

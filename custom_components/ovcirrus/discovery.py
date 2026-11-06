@@ -149,10 +149,25 @@ def guess_os(services: list[dict]) -> str | None:
     return None
 
 
-async def discover(host: str) -> dict:
+async def _probe_extra(host: str, port: int, sem: asyncio.Semaphore) -> dict | None:
+    """Quick-scan check of one of your own ports: identify it only if it is open."""
+    async with sem:
+        try:
+            _, writer = await asyncio.wait_for(asyncio.open_connection(host, port), CONNECT_TIMEOUT)
+        except (OSError, asyncio.TimeoutError):
+            return None
+        writer.close()
+    return await _identify_port(host, port, sem)
+
+
+async def discover(host: str, extra_ports: set[int] | None = None) -> dict:
+    """Quick scan: the common ports above plus your own ports (names you gave for every device)."""
     sem = asyncio.Semaphore(CONCURRENCY)
     started = time.time()
-    results = await asyncio.gather(*(_probe(host, p, sem) for p in PORTS), return_exceptions=True)
+    extra = sorted(set(extra_ports or ()) - set(PORTS))
+    results = await asyncio.gather(
+        *(_probe(host, p, sem) for p in PORTS), *(_probe_extra(host, p, sem) for p in extra), return_exceptions=True
+    )
     services = sorted((r for r in results if isinstance(r, dict)), key=lambda r: r["port"])
     return {
         "ip": host,
@@ -236,7 +251,7 @@ async def _connect_scan(host: str) -> list[int]:
     return sorted(open_ports)
 
 
-async def _recheck_known(host: str, skip: set[int]) -> list[int]:
+async def _recheck_known(host: str, skip: set[int], extra_ports: set[int] | None = None) -> list[int]:
     """Slow, gentle second look at well-known ports the fast sweep may have missed."""
     sem = asyncio.Semaphore(RECHECK_CONCURRENCY)
     found: list[int] = []
@@ -250,7 +265,7 @@ async def _recheck_known(host: str, skip: set[int]) -> list[int]:
             found.append(port)
             writer.close()
 
-    await asyncio.gather(*(one(p) for p in sorted((set(PORTS) | set(WELL_KNOWN)) - skip)))
+    await asyncio.gather(*(one(p) for p in sorted((set(PORTS) | set(WELL_KNOWN) | set(extra_ports or ())) - skip)))
     return found
 
 
@@ -302,13 +317,13 @@ class ScanError(Exception):
     """A scan could not be completed; the message says why in plain words."""
 
 
-async def full_scan(host: str) -> dict:
-    """Every TCP port: a moderate connect sweep, a slow re-check of well-known ports, then naming."""
+async def full_scan(host: str, extra_ports: set[int] | None = None) -> dict:
+    """Every TCP port: a moderate connect sweep, a slow re-check of well-known and your own ports, then naming."""
     started = time.time()
     await asyncio.to_thread(_load_iana)
     sem = asyncio.Semaphore(CONCURRENCY)
     ports = await _connect_scan(host)
-    missed = await _recheck_known(host, set(ports))
+    missed = await _recheck_known(host, set(ports), extra_ports)
     if missed:
         _LOGGER.info("Full scan of %s: slow re-check found %s the sweep missed", host, missed)
     ports = sorted(set(ports) | set(missed))

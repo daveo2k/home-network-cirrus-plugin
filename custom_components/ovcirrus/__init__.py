@@ -232,6 +232,7 @@ def ws_topology(hass: HomeAssistant, connection: websocket_api.ActiveConnection,
                 "title": entry.title,
                 "updated": coordinator.last_update_success,
                 "sites": list(coordinator.data.maps.values()),
+                "port_names": dict(coordinator.store.port_labels.get("*", {})),
             }
         )
     connection.send_result(
@@ -469,7 +470,7 @@ def ws_save_view(hass: HomeAssistant, connection: websocket_api.ActiveConnection
     {
         vol.Required("type"): "ovcirrus/label_port",
         vol.Required("entry_id"): str,
-        vol.Required("ip"): str,
+        vol.Optional("ip"): vol.Any(None, str),
         vol.Required("port"): vol.All(vol.Coerce(int), vol.Range(min=1, max=65535)),
         vol.Optional("label"): vol.Any(None, vol.All(str, vol.Length(max=60))),
         vol.Optional("all_devices", default=False): bool,
@@ -477,16 +478,17 @@ def ws_save_view(hass: HomeAssistant, connection: websocket_api.ActiveConnection
 )
 @callback
 def ws_label_port(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict) -> None:
-    """Name a port the scan could not identify, for this device or for every device."""
+    """Name a port for one device, or (no ip / all_devices) for every device: your own port list."""
     coordinator = _coordinator(hass, msg["entry_id"])
     if not coordinator:
         connection.send_error(msg["id"], "not_found", "Unknown entry")
         return
     label = (msg.get("label") or "").strip() or None
-    scope_ip = None if msg["all_devices"] else msg["ip"]
+    ip = msg.get("ip")
+    scope_ip = None if msg["all_devices"] or not ip else ip
     coordinator.store.set_port_label(scope_ip, msg["port"], label)
-    if label is None:  # clearing: remove it from both scopes so the scan result shows again
-        coordinator.store.set_port_label(None if scope_ip else msg["ip"], msg["port"], None)
+    if label is None and ip:  # clearing from a device: remove it from both scopes so the scan result shows again
+        coordinator.store.set_port_label(None if scope_ip else ip, msg["port"], None)
     coordinator.rebuild()
     connection.send_result(msg["id"], {"ok": True})
 
