@@ -8,9 +8,12 @@ against devices the user has enabled discovery for, or asked to scan from the ma
 from __future__ import annotations
 
 import asyncio
+import logging
 import re
 import ssl
 import time
+
+_LOGGER = logging.getLogger(__name__)
 
 CONNECT_TIMEOUT = 1.2
 READ_TIMEOUT = 2.0
@@ -243,10 +246,14 @@ async def _nmap_scan(host: str) -> list[dict]:
         out, err = await asyncio.wait_for(proc.communicate(), NMAP_TIMEOUT)
     except asyncio.TimeoutError:
         proc.kill()
-        raise
+        raise ScanError(f"nmap took longer than {NMAP_TIMEOUT // 60} minutes") from None
     if proc.returncode != 0:
-        raise RuntimeError(f"nmap failed: {err.decode(errors='replace')[:200]}")
-    services = parse_nmap_xml(out.decode(errors="replace"))
+        msg = err.decode(errors="replace").strip().splitlines()
+        raise ScanError(f"nmap stopped with code {proc.returncode}: {(msg[-1] if msg else 'no message')[:200]}")
+    try:
+        services = parse_nmap_xml(out.decode(errors="replace"))
+    except ET.ParseError as exc:
+        raise ScanError(f"nmap's output could not be read ({exc})") from None
     for s in services:
         if "url" in s:
             s["url"] = s["url"].replace("{host}", host)
@@ -315,13 +322,27 @@ async def _identify_port(host: str, port: int, sem: asyncio.Semaphore) -> dict:
     return entry
 
 
+class ScanError(Exception):
+    """A scan could not be completed; the message says why in plain words."""
+
+
 async def full_scan(host: str) -> dict:
-    """Every TCP port. Uses nmap (with version detection) when installed, else a connect scan."""
+    """Every TCP port. Uses nmap (with version detection) when installed, else a connect scan.
+
+    If nmap fails, the built-in scanner runs instead and the result notes why nmap was not used.
+    """
     started = time.time()
     engine = "nmap" if nmap_available() else "built-in"
+    note = None
+    services: list[dict] = []
     if engine == "nmap":
-        services = await _nmap_scan(host)
-    else:
+        try:
+            services = await _nmap_scan(host)
+        except (ScanError, OSError) as err:
+            _LOGGER.warning("Full scan of %s: %s; using the built-in scanner instead", host, err)
+            note = f"nmap failed ({err}), so the built-in scanner was used."
+            engine = "built-in"
+    if engine == "built-in":
         sem = asyncio.Semaphore(CONCURRENCY)
         ports = await _connect_scan(host)
         services = sorted(await asyncio.gather(*(_identify_port(host, p, sem) for p in ports)), key=lambda s: s["port"])
@@ -333,6 +354,7 @@ async def full_scan(host: str) -> dict:
         "duration": round(time.time() - started, 1),
         "mode": "full",
         "engine": engine,
+        "note": note,
         "services": services,
         "role": guess_role(services),
         "os": guess_os(services),

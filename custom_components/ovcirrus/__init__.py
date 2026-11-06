@@ -516,7 +516,12 @@ async def ws_discover(hass: HomeAssistant, connection: websocket_api.ActiveConne
     if not coordinator:
         connection.send_error(msg["id"], "not_found", "Unknown entry")
         return
-    result = await coordinator.async_discover(str(addr), msg["mode"])
+    try:
+        result = await coordinator.async_discover(str(addr), msg["mode"])
+    except Exception as err:  # noqa: BLE001 - tell the card why instead of "Unknown error"
+        _LOGGER.exception("Scan of %s failed", addr)
+        connection.send_error(msg["id"], "scan_failed", f"{type(err).__name__}: {err}" if str(err) else type(err).__name__)
+        return
     connection.send_result(msg["id"], result)
 
 
