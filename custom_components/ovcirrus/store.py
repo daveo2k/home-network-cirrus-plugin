@@ -26,6 +26,7 @@ class EntryStore:
         self.manual: list[dict] = []  # devices added by the user (map or options)
         self.port_labels: dict[str, dict[str, str]] = {}  # "*" or IP -> port -> your name for it
         self.view: dict[str, float] = {}  # saved map sizes for every browser: font, client, device
+        self.photos: dict[str, dict] = {}  # MAC or manual-device id -> {"file", "v"} (your picture of it)
         self.baseline_done = False
 
     async def async_load(self) -> None:
@@ -37,6 +38,7 @@ class EntryStore:
         self.manual = data.get("manual", [])
         self.port_labels = data.get("port_labels", {})
         self.view = data.get("view", {})
+        self.photos = data.get("photos", {})
         self.baseline_done = data.get("baseline_done", False)
 
     def _data(self) -> dict:
@@ -48,6 +50,7 @@ class EntryStore:
             "manual": self.manual,
             "port_labels": self.port_labels,
             "view": self.view,
+            "photos": self.photos,
             "baseline_done": self.baseline_done,
         }
 
@@ -114,6 +117,13 @@ class EntryStore:
             self.overrides[mac] = entry
         else:
             self.overrides.pop(mac, None)
+        self.schedule_save()
+
+    def set_photo(self, key: str, file: str | None, version: int = 0) -> None:
+        if file:
+            self.photos[key] = {"file": file, "v": version}
+        else:
+            self.photos.pop(key, None)
         self.schedule_save()
 
     def set_position(self, site_id: str, node_id: str, offset: list[float] | None) -> None:

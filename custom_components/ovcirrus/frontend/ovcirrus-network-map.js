@@ -390,6 +390,31 @@ function gatewaySvg(status, mini, g) {
     ${tiles}</svg>`;
 }
 
+// Your picture of a client: drawn onto a canvas no larger than PHOTO_PX, sent as WebP (PNG where the
+// browser can't make WebP) so uploads stay small and transparency is kept.
+const PHOTO_PX = 480;
+async function shrinkPhoto(file) {
+  const url = URL.createObjectURL(file);
+  try {
+    const img = await new Promise((ok, fail) => {
+      const im = new Image();
+      im.onload = () => ok(im);
+      im.onerror = fail;
+      im.src = url;
+    });
+    const k = Math.min(1, PHOTO_PX / Math.max(img.naturalWidth, img.naturalHeight));
+    const c = document.createElement("canvas");
+    c.width = Math.max(1, Math.round(img.naturalWidth * k));
+    c.height = Math.max(1, Math.round(img.naturalHeight * k));
+    c.getContext("2d").drawImage(img, 0, 0, c.width, c.height);
+    let data = c.toDataURL("image/webp", 0.86);
+    if (!data.startsWith("data:image/webp")) data = c.toDataURL("image/png");
+    return data.split(",")[1];
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
 function deviceGraphic(n, mini) {
   const g = n.graphic;
   if (!g) return "";
@@ -1243,7 +1268,9 @@ class OvCirrusNetworkMap extends HTMLElement {
           const square = n.graphic?.type === "switch" ? " square" : ""; // rounded-square icon (switches)
           const client = CLIENT_KINDS.has(n.kind) ? " client" : "";
           return `<div class="node ${esc(n.kind)}${big}${square}${client}${sel}" data-id="${esc(n.id)}" style="left:${n._x}px;top:${n._y}px;width:${n._rw || n._cw}px;height:${n._ch || CHIP_H}px;--rs:${ringSize(n)}px">
-              <div class="ring ${esc(n.status)} ${n.graphic ? "g-" + esc(n.graphic.type) : ""}"${big ? ` style="--rs:${ringSize(n)}px;--bs:${Math.round(16 * DEVICE_SCALE)}px"` : ""}>${n.graphic ? deviceGraphic(n, true) : `<ha-icon icon="${esc(n.icon)}"></ha-icon>`}${badge}</div>
+              <div class="ring ${esc(n.status)} ${n.graphic ? "g-" + esc(n.graphic.type) : ""}${n.photo && !n.graphic ? " hasphoto" : ""}"${big ? ` style="--rs:${ringSize(n)}px;--bs:${Math.round(16 * DEVICE_SCALE)}px"` : ""}>${
+                n.graphic ? deviceGraphic(n, true) : n.photo ? `<img class="cphoto" src="${esc(n.photo)}" alt="" loading="lazy">` : `<ha-icon icon="${esc(n.icon)}"></ha-icon>`
+              }${badge}</div>
               <div class="txt"><div class="name" title="${esc(n.name)}">${esc(n.name)}</div>
               <div class="sub" title="${esc(n.subtitle)}">${esc(n.subtitle)}</div></div>${toggle}</div>`;
         })
@@ -1286,7 +1313,9 @@ class OvCirrusNetworkMap extends HTMLElement {
     const linked = g?.type === "switch"
       ? Object.entries(g.ports || {}).filter(([, p]) => p.label).sort((a, b) => a[0] - b[0])
       : [];
-    const graphicBlock = g
+    const graphicBlock = !g && sel?.photo
+      ? `<div class="pgraphic photo"><img class="photo" src="${esc(sel.photo)}" alt="${esc(sel.name)}"></div>`
+      : g
       ? `<div class="pgraphic ${esc(g.type)}">${deviceGraphic(sel, false)}</div>${
           g.type === "switch"
             ? `<div class="legend"><span><i class="led up"></i>up</span><span><i class="led down"></i>down</span><span><i class="led off"></i>disabled</span><span><i class="swatch linked"></i>has neighbour</span></div>${
@@ -1340,7 +1369,9 @@ class OvCirrusNetworkMap extends HTMLElement {
                       ? `<button class="act" disabled>${scanning === "full" ? "Scanning all 65,535 ports… (can take a few minutes)" : "Scanning…"}</button>`
                       : `<button class="act" data-scan="quick" data-ip="${esc(sel.ip)}" title="About 40 common service ports">Quick scan</button>
                          <button class="act ghost" data-scan="full" data-ip="${esc(sel.ip)}" title="Every TCP port, with nmap service detection when available">Full scan (all ports)</button>`
-                  }</div><div class="muted">${
+                  }</div>${
+                    this._scanErr?.ip === sel.ip ? `<div class="muted err">${esc(this._scanErr.text)}</div>` : ""
+                  }<div class="muted">${
                     this._nmap
                       ? "Full scans use nmap with service detection."
                       : "nmap isn't installed in Home Assistant, so full scans use the built-in scanner (slower, less detail). See Settings → Repairs for how to add it."
@@ -1403,12 +1434,24 @@ class OvCirrusNetworkMap extends HTMLElement {
                <button class="act ghost" type="button" data-reset>Reset to automatic</button></div></form>`
           : `<button class="act ghost" data-startedit>Rename / change type</button>`
         : "";
+    const photoBlock =
+      sel?.photo_key && this._isAdmin
+        ? `<div class="row photorow">${
+            this._photoBusy
+              ? `<button class="act ghost" disabled>Saving picture…</button>`
+              : `<button class="act ghost" data-photo="pick" title="A PNG, JPEG or WebP picture of this exact device; it is shrunk to ${PHOTO_PX}px before upload">${sel.photo ? "Change picture" : "Add picture"}</button>${
+                  sel.photo ? `<button class="act ghost" data-photo="remove">Remove picture</button>` : ""
+                }`
+          }<input type="file" accept="image/png,image/jpeg,image/webp" data-photofile hidden></div>${
+            this._photoMsg ? `<div class="muted err">${esc(this._photoMsg)}</div>` : ""
+          }`
+        : "";
     const panel = sel
       ? `<div class="panel ${g?.type === "switch" ? "wide xwide" : sel.unifi ? "wide" : ""}"><div class="ptitle"><ha-icon icon="${esc(sel.icon)}"></ha-icon><b>${esc(sel.name)}</b>
            ${sel.is_new ? `<span class="new inline">NEW</span>` : ""}<button class="close" data-close>×</button></div>${graphicBlock}
            ${speedBlock}${this._unifiBlock(sel)}
            <table>${(sel.details || []).map(([k, v]) => `<tr><td>${esc(k)}</td><td>${esc(v)}</td></tr>`).join("")}</table>
-           ${servicesBlock}${editBlock}${deviceActions}</div>`
+           ${servicesBlock}${editBlock}${photoBlock}${deviceActions}</div>`
       : "";
 
     this.shadowRoot.innerHTML = `<style>${STYLE}</style>
@@ -1727,15 +1770,45 @@ class OvCirrusNetworkMap extends HTMLElement {
         const ip = b.dataset.ip, mode = b.dataset.scan;
         this._scanning = { ip, mode };
         this._render();
+        this._scanErr = null;
         try {
           await this._hass.callWS({ type: "ovcirrus/discover", entry_id: entryId, ip, mode });
         } catch (err) {
           console.warn("ovcirrus scan failed", err);
+          this._scanErr = { ip, text: `The scan failed: ${err?.message || err?.code || err}` };
         }
         this._scanning = null;
         await this._fetch();
       })
     );
+    // your own picture of this client / device
+    const photoInput = root.querySelector("[data-photofile]");
+    root.querySelector('[data-photo="pick"]')?.addEventListener("click", () => photoInput?.click());
+    const sendPhoto = async (data) => {
+      const sel = this._index?.get(this._selected);
+      if (!sel?.photo_key) return;
+      this._photoBusy = true;
+      this._photoMsg = null;
+      this._render();
+      try {
+        await this._hass.callWS({ type: "ovcirrus/set_photo", entry_id: entryId, key: sel.photo_key, data });
+      } catch (err) {
+        this._photoMsg = err?.message || "The picture could not be saved.";
+      }
+      this._photoBusy = false;
+      await this._fetch();
+    };
+    photoInput?.addEventListener("change", async () => {
+      const file = photoInput.files?.[0];
+      if (!file) return;
+      try {
+        sendPhoto(await shrinkPhoto(file));
+      } catch (err) {
+        this._photoMsg = "That file could not be read as a picture.";
+        this._render();
+      }
+    });
+    root.querySelector('[data-photo="remove"]')?.addEventListener("click", () => sendPhoto(null));
     // name unknown ports
     root.querySelectorAll("[data-nameport]").forEach((b) =>
       b.addEventListener("click", () => {
@@ -2293,6 +2366,11 @@ const STYLE = `
   .legend i.swatch.linked { width:10px; height:8px; border:1.5px solid var(--primary-color); background:#12161a; }
   table.ports { margin-bottom:10px; }
   table.ports td:first-child { font-family:var(--ovc-font-data, ui-monospace, monospace); }
+  .ring.hasphoto { background:#fff; }
+  .ring img.cphoto { width:70%; height:70%; object-fit:contain; display:block; }
+  .pgraphic.photo img.photo { max-height:200px; border-radius:8px; }
+  .photorow { margin-top:8px; }
+  .muted.err { color:var(--error-color,#db4437); }
   .ring img.logo { position:absolute; right:-5px; bottom:-5px; width:16px; height:16px; object-fit:contain; padding:1.5px;
     border-radius:50%; background:#fff; border:1px solid var(--divider-color); box-sizing:border-box; }
   .new { position:absolute; left:-8px; top:-7px; background:var(--warning-color,#ffa600); color:#000; font-size:8.5px; font-weight:700;

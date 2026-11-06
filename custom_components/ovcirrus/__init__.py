@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ipaddress
 import logging
+import time
 from pathlib import Path
 
 import voluptuous as vol
@@ -37,6 +38,8 @@ from .const import (
     CONF_HOST,
     DOMAIN,
     IMAGES_URL,
+    PHOTOS_DIR,
+    PHOTOS_URL,
     USER_IMAGES_DIR,
     VERSION,
 )
@@ -44,6 +47,8 @@ from .coordinator import CirrusCoordinator
 from .history import RANGES
 from .identify import TYPES
 from .mac_table import norm_mac
+from .photos import KEY_RE, PhotoError
+from . import photos as photo_files
 from .store import EntryStore
 from .topology import model_slug
 
@@ -59,12 +64,15 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     """Register the map card and websocket API once."""
     frontend_dir = Path(__file__).parent / "frontend"
     cache_dir = Path(hass.config.path(CACHE_DIR))
+    photos_dir = Path(hass.config.path(PHOTOS_DIR))
     await hass.async_add_executor_job(lambda: cache_dir.mkdir(parents=True, exist_ok=True))
+    await hass.async_add_executor_job(lambda: photos_dir.mkdir(parents=True, exist_ok=True))
     await hass.http.async_register_static_paths(
         [
             StaticPathConfig(CARD_URL, str(frontend_dir / "ovcirrus-network-map.js"), cache_headers=False),
             StaticPathConfig(IMAGES_URL, str(frontend_dir / "images"), cache_headers=True),
             StaticPathConfig(CACHE_URL, str(cache_dir), cache_headers=True),
+            StaticPathConfig(PHOTOS_URL, str(photos_dir), cache_headers=True),  # URLs carry ?v=
         ]
     )
     assets = AssetCache(
@@ -109,6 +117,7 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     websocket_api.async_register_command(hass, ws_reset_positions)
     websocket_api.async_register_command(hass, ws_backup)
     websocket_api.async_register_command(hass, ws_rates)
+    websocket_api.async_register_command(hass, ws_set_photo)
     websocket_api.async_register_command(hass, ws_restore)
     return True
 
@@ -265,6 +274,40 @@ def ws_set_override(hass: HomeAssistant, connection: websocket_api.ActiveConnect
         connection.send_error(msg["id"], "not_found", "Unknown entry or MAC")
         return
     coordinator.store.set_override(mac, (msg.get("name") or "").strip() or None, msg.get("dev_type"))
+    coordinator.rebuild()
+    connection.send_result(msg["id"], {"ok": True})
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "ovcirrus/set_photo",
+        vol.Required("entry_id"): str,
+        vol.Required("key"): str,  # MAC address, or the map id of a device without one
+        vol.Optional("data"): vol.Any(None, str),  # base64 PNG / JPEG / WebP; none removes the picture
+    }
+)
+@websocket_api.async_response
+async def ws_set_photo(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict) -> None:
+    """Your own picture of one client or device, shown on the map and in its details."""
+    coordinator = _coordinator(hass, msg["entry_id"])
+    key = norm_mac(msg["key"]) or msg["key"].strip()
+    if not coordinator or not KEY_RE.match(key):
+        connection.send_error(msg["id"], "not_found", "Unknown entry or device")
+        return
+    folder = Path(hass.config.path(PHOTOS_DIR))
+    old = (coordinator.store.photos.get(key) or {}).get("file")
+    if msg.get("data"):
+        try:
+            raw, ext = photo_files.decode(msg["data"])
+        except PhotoError as err:
+            connection.send_error(msg["id"], "invalid_photo", str(err))
+            return
+        name = await hass.async_add_executor_job(photo_files.write, folder, key, raw, ext)
+        coordinator.store.set_photo(key, name, int(time.time()))
+    else:
+        await hass.async_add_executor_job(photo_files.remove, folder, old)
+        coordinator.store.set_photo(key, None)
     coordinator.rebuild()
     connection.send_result(msg["id"], {"ok": True})
 

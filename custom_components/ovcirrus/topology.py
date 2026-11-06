@@ -840,9 +840,9 @@ def build_site_map(
         by_ssid: dict[str, list[dict]] = defaultdict(list)
         for client in clients_by_ap.get(key, []):
             cmac = norm_mac(client.get("clientMac"))
-            by_ssid[client.get("ssid") or "Unknown SSID"].append(
-                _wireless_node(client, ha_names, names, idents.get(cmac or ""))
-            )
+            wnode = _wireless_node(client, ha_names, names, idents.get(cmac or ""))
+            wnode["services"] = extras.services.get(wnode.get("ip") or "")  # scan results (were never attached)
+            by_ssid[client.get("ssid") or "Unknown SSID"].append(wnode)
         for ssid in sorted(by_ssid):
             kids = sorted(by_ssid[ssid], key=lambda n: n["name"].lower())
             groups.append({"id": f"{key}-ssid-{ssid}", "label": f"{ssid} ({len(kids)})",

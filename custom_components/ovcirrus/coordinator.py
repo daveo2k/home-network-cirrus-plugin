@@ -38,6 +38,7 @@ from .const import (
     CONF_SSH_KNOWN_HOSTS,
     CONF_SSH_PORT,
     CONF_SSH_USERNAME,
+    PHOTOS_URL,
     CONF_RATE_FINE_HOURS,
     CONF_RATE_INTERVAL,
     CONF_RATE_LONG_DAYS,
@@ -590,6 +591,7 @@ class CirrusCoordinator(DataUpdateCoordinator[CirrusData]):
                     images=images,
                     extras=extras,
                 )
+                self._apply_photos(maps[sid])
                 maps[sid]["ssh_errors"] = list(data.ssh_errors.values())
                 maps[sid]["positions"] = dict(self.store.positions.get(sid, {}))
                 maps[sid]["switches"] = [
@@ -635,6 +637,18 @@ class CirrusCoordinator(DataUpdateCoordinator[CirrusData]):
         self.data.maps = self._build_maps(self.data)
         self._observe(self.data)
         self.async_set_updated_data(self.data)
+
+    def _apply_photos(self, site_map: dict) -> None:
+        """Your uploaded pictures, by MAC (so they follow a client between Wi-Fi and cable) or map id."""
+        photos = self.store.photos
+        for node in walk_nodes(site_map["root"]):
+            if node.get("kind") in ("internet", "ap", "switch", "gateway"):
+                continue
+            key = norm_mac(node.get("mac")) or node.get("id")
+            node["photo_key"] = key
+            p = photos.get(key or "") or photos.get(node.get("id") or "")
+            if p:
+                node["photo"] = f"{PHOTOS_URL}/{p['file']}?v={p.get('v', 0)}"
 
     # ---------------------------------------------------------------- discovery
     def _schedule_discovery(self, data: CirrusData) -> None:

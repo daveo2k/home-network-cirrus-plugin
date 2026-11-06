@@ -74,6 +74,10 @@ DEFAULT_DISCOVERY_INTERVAL = 24
 EVENT_NEW_CLIENT = "ovcirrus_new_client"
 CACHE_DIR = "ovcirrus_cache"
 CACHE_URL = "/ovcirrus_cache"
+# Your own pictures of individual clients and devices (uploaded from the map)
+PHOTOS_DIR = "ovcirrus_photos"  # under /config
+PHOTOS_URL = "/ovcirrus_photos"
+PHOTO_MAX_BYTES = 1024 * 1024
 
 # Sidebar panel with the full-screen network map
 CONF_SHOW_PANEL = "show_panel"

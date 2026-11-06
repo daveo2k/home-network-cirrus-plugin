@@ -132,6 +132,10 @@ Any wired device the map already shows (from the MAC table or LLDP) has **Add to
 
 Devices can also be added under **Configure** → **Servers & manual devices**. Scans repeat every 24 h by default (**Configure** → **General**). Only private / link-local addresses can be scanned, and some intrusion-detection systems will notice a scan.
 
+### Your own pictures
+
+Admins can give any client or manual device its own picture: open it on the map and click **Add picture** (PNG, JPEG or WebP, e.g. a photo of the actual Shelly relay). The browser shrinks it to 480 px before upload. It replaces the icon on the map and shows in the device's details. Pictures are stored in `/config/ovcirrus_photos`, belong to the device's MAC address (so they follow it between Wi-Fi and cable) and are included in backups.
+
 ### Installing nmap
 
 Full scans use nmap when Home Assistant can find it. The integration does not install system packages itself, because Home Assistant's container is replaced on every update. If a full scan is requested and nmap is missing, a notice appears under **Settings → Repairs**, and the scan uses the built-in scanner instead.
