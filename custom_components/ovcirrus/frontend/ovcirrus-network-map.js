@@ -3,13 +3,14 @@
  * type: custom:ovcirrus-network-map
  * Options: entry_id, site (id or name), refresh (s, default 30), expand_clients (bool),
  *          max_columns (default 3), height (px, default 640), title,
- *          text_size (px size of device names on the map, default 16; other map labels scale with it;
+ *          text_size (pt size of device names on the map, default 12pt; other map labels scale with it;
  *                     viewers can change it in the View menu; the old font_scale multiplier still works),
  *          layout_editing ("admin" default, true, or false: who may drag devices and save the layout),
  *          snap_to_grid (default true), grid_size (px, default 20),
  *          height: "fill" makes the map fill its container (used by the sidebar panel),
- *          device_scale (size of gateways/switches/APs/wired devices, default 2),
- *          client_scale (size of wireless and wired clients, default 1); viewers can change both
+ *          device_size (size of gateways/switches/APs/wired devices, default 1),
+ *          client_size (size of wireless and wired clients, default 1); viewers can change both.
+ *          1x is 3.75 times the original ring size; the old device_scale / client_scale still work.
  */
 const CARD_VERSION = "0.2.8"; // kept in step with manifest.json by scripts/release.sh
 const CHIP_W = 210; // minimum device box width
@@ -23,10 +24,12 @@ let LABEL_H = BASE.LABEL_H; // title row inside the box: PAD above the title, th
 const V_GAP = 64;
 const TRUNK = 28;
 let LABEL_ROW = BASE.LABEL_ROW; // height of one link label row inside a group box
-let FS = 1; // text size multiplier for the map (text size / NAME_PX)
-// The map text size is set as the px size of device names; every other map label keeps its proportion.
+let FS = 1; // text size multiplier for the map (text size in px / NAME_PX)
+// The map text size is set as the pt size of device names; every other map label keeps its proportion.
 const NAME_PX = 13; // .name font-size in the CSS below, i.e. the size at FS = 1
-const TEXT_DEFAULT = 16, TEXT_MIN = 10, TEXT_MAX = 26, TEXT_KEY = "ovcirrus-text-size";
+const PT_PX = 4 / 3; // 1pt = 1.333px
+const TEXT_DEFAULT = 12, TEXT_MIN = 8, TEXT_MAX = 30, TEXT_KEY = "ovcirrus-text-pt";
+const textFs = (pt) => ((pt || TEXT_DEFAULT) * PT_PX) / NAME_PX;
 const FS_KEY = "ovcirrus-font-scale"; // legacy multiplier, read once and converted
 const clampText = (v) => Math.round(Math.min(TEXT_MAX, Math.max(TEXT_MIN, Number(v) || TEXT_DEFAULT)));
 // Old saved multipliers were relative to the default size, so 1.0 maps onto the new default.
@@ -40,6 +43,7 @@ function applyFontScale(fs) {
   LABEL_H = Math.round(BASE.LABEL_H * up);
   LABEL_ROW = Math.round(BASE.LABEL_ROW * Math.max(0.85, fs));
 }
+const ZOOM_KEY = "ovcirrus-zoom";
 const BUNDLE_STEP = 16; // spacing between parallel link lines
 const BAND_GAP = 2 * 22 + 1; // space between frequency-band sections in a client box (gap, dotted line, gap)
 const bandLabel = (b) => (b ? String(b).replace(/\s*ghz$/i, " GHz").replace(/^(\d)ghz/i, "$1 GHz") : "Other");
@@ -48,13 +52,18 @@ const bandOrder = (b) => {
   return isNaN(n) ? 99 : n;
 };
 
-// Devices drawn at device_scale (default 2x); wireless clients and the Internet node stay normal size.
+// Devices and clients are drawn at SIZE_BASE times the 42px ring, times the viewer's size (1x default);
+// the Internet node stays at 42px. Older settings were raw multipliers of 42px, so they are divided by SIZE_BASE.
+const SIZE_BASE = 3.75;
 const BIG_KINDS = new Set(["gateway", "switch", "ap", "bridge", "endpoint", "manual"]);
-let DEVICE_SCALE = 2;
-const DS_MIN = 1, DS_MAX = 3, DS_STEP = 0.25, DS_KEY = "ovcirrus-device-scale";
+let DEVICE_SCALE = SIZE_BASE;
+const DS_MIN = 0.5, DS_MAX = 2, DS_STEP = 0.25, DS_KEY = "ovcirrus-device-size", DS_OLD_KEY = "ovcirrus-device-scale";
 const CLIENT_KINDS = new Set(["wireless", "wired"]);
-let CLIENT_SCALE = 1;
-const CS_MIN = 0.75, CS_MAX = 2.5, CS_STEP = 0.25, CS_KEY = "ovcirrus-client-scale";
+let CLIENT_SCALE = SIZE_BASE;
+const CS_MIN = 0.25, CS_MAX = 2, CS_STEP = 0.25, CS_KEY = "ovcirrus-client-size", CS_OLD_KEY = "ovcirrus-client-scale";
+const clampSize = (v, lo, hi) => (Number(v) ? Math.min(hi, Math.max(lo, Math.round(Number(v) * 4) / 4)) : null);
+// size in the new units from a new value, else from an old raw multiplier
+const sizeFrom = (v, old, lo, hi) => clampSize(v, lo, hi) || (Number(old) ? clampSize(Number(old) / SIZE_BASE, lo, hi) : null);
 const ringSize = (n) =>
   BIG_KINDS.has(n.kind) ? Math.round(42 * DEVICE_SCALE) : CLIENT_KINDS.has(n.kind) ? Math.round(42 * CLIENT_SCALE) : 42;
 const chipH = (n) =>
@@ -246,6 +255,12 @@ class OvCirrusNetworkMap extends HTMLElement {
     this.attachShadow({ mode: "open" });
     this._collapsed = new Map(); // id -> bool (user overrides)
     this._zoom = null; // null = fit
+    try {
+      const z = Number(localStorage.getItem(ZOOM_KEY)); // remembered per browser; missing or "fit" = fit
+      if (z) this._zoom = Math.min(2, Math.max(0.2, z));
+    } catch (e) {
+      // storage blocked: start at fit
+    }
     this._selected = null;
     this._siteIdx = 0;
   }
@@ -253,7 +268,7 @@ class OvCirrusNetworkMap extends HTMLElement {
   setConfig(config) {
     this._config = {
       refresh: 30, max_columns: 3, height: 640, expand_clients: false,
-      layout_editing: "admin", snap_to_grid: true, grid_size: 20, device_scale: 2, ...config,
+      layout_editing: "admin", snap_to_grid: true, grid_size: 20, ...config,
     };
     let snap = null;
     try {
@@ -265,18 +280,18 @@ class OvCirrusNetworkMap extends HTMLElement {
     this._grid = Math.max(5, Math.min(100, Number(this._config.grid_size) || 20));
     let storedDs = null;
     try {
-      storedDs = Number(localStorage.getItem(DS_KEY)) || null;
+      storedDs = sizeFrom(localStorage.getItem(DS_KEY), localStorage.getItem(DS_OLD_KEY), DS_MIN, DS_MAX);
     } catch (e) {
       storedDs = null;
     }
-    this._ds = Math.min(DS_MAX, Math.max(DS_MIN, storedDs || Number(this._config.device_scale) || 2));
+    this._ds = storedDs || this._cfgDevice();
     let storedCs = null;
     try {
-      storedCs = Number(localStorage.getItem(CS_KEY)) || null;
+      storedCs = sizeFrom(localStorage.getItem(CS_KEY), localStorage.getItem(CS_OLD_KEY), CS_MIN, CS_MAX);
     } catch (e) {
       storedCs = null;
     }
-    this._cs = Math.min(CS_MAX, Math.max(CS_MIN, storedCs || Number(this._config.client_scale) || 1));
+    this._cs = storedCs || this._cfgClient();
     this._local = { device: !!storedDs, client: !!storedCs };
     this._applyFill();
     let stored = null;
@@ -287,6 +302,14 @@ class OvCirrusNetworkMap extends HTMLElement {
     }
     this._tp = stored || configText(this._config);
     this._local = { ...(this._local || {}), font: !!stored };
+  }
+
+  _cfgDevice() {
+    return sizeFrom(this._config?.device_size, this._config?.device_scale, DS_MIN, DS_MAX) || 1;
+  }
+
+  _cfgClient() {
+    return sizeFrom(this._config?.client_size, this._config?.client_scale, CS_MIN, CS_MAX) || 1;
   }
 
   static getStubConfig() {
@@ -560,6 +583,7 @@ class OvCirrusNetworkMap extends HTMLElement {
         let cxs = x + PAD;
         for (const c of g.children) {
           const ccx = cxs + c._w / 2;
+          c._box = g; // the box this device sits in (links to its children start from its centre)
           this._place(c, ccx, chipY, out, ox, oy);
           const link = c.link || {};
           out.edges.push({
@@ -664,7 +688,7 @@ class OvCirrusNetworkMap extends HTMLElement {
     let H = 0;
     if (site) {
       const root = site.root;
-      applyFontScale((this._tp || TEXT_DEFAULT) / NAME_PX);
+      applyFontScale(textFs(this._tp));
       VLAN_NAMES = Object.fromEntries(Object.entries(site.vlans || {}).map(([k, v]) => [k, v.name]));
       VLAN_COLORS = Object.fromEntries(Object.keys(site.vlans || {}).map((k, i) => [k, VLAN_PALETTE[i % VLAN_PALETTE.length]]));
       if (this._vlan != null && !(String(this._vlan) in (site.vlans || {}))) this._vlan = null;
@@ -682,8 +706,8 @@ class OvCirrusNetworkMap extends HTMLElement {
         n.groups.forEach((g) => g.children.forEach(walk));
       };
       walk(root);
-      DEVICE_SCALE = this._ds || 2;
-      CLIENT_SCALE = this._cs || 1;
+      DEVICE_SCALE = SIZE_BASE * (this._ds || 1);
+      CLIENT_SCALE = SIZE_BASE * (this._cs || 1);
       for (const n of this._index.values()) {
         n._ch = chipH(n);
         n._cw = this._chipWidth(n);
@@ -715,21 +739,60 @@ class OvCirrusNetworkMap extends HTMLElement {
           };
           if (members && members.length > 1) {
             // Split a bundle of parallel links into separate lines, each with its own label.
+            // Each line ends at the centre of its port label (the label is opaque and drawn above the
+            // lines, so the line meets its edge), entering from the side the parent is on. It leaves the
+            // parent from the bottom, top or side facing the labels, so it never runs across a device.
             const n = members.length;
             const step = BUNDLE_STEP;
-            return members
-              .map((m, i) => {
-                const dx = (i - (n - 1) / 2) * step;
+            // Lines leave from the centre of the parent's box (its own chip if it has no box).
+            const p = e.from;
+            const b = p._box && p._box._bw ? { x: p._box._bx, y: p._box._y, w: p._box._bw, h: p._box._h } : null;
+            const px = b ? b.x : p._x, py = b ? b.y : p._y;
+            const pw = b ? b.w : p._rw || p._cw, ph = b ? b.h : p._ch || CHIP_H;
+            const pcx = px + pw / 2, pcy = py + ph / 2;
+            const lx = x2 + ((n - 1) / 2) * step + 12;
+            const rowH = 17 * FS;
+            const rows = members.map((m, i) => {
+              const key = `${e.cid}:${i}`;
+              const w = 10 + 8 + 3 + this._textWidth(m.label, "600 10.5px") +
+                this._textWidth(m.speed ? ` ${m.speed} ` : " ", "10.5px") + this._chipsWidth(m, 4, key);
+              const y = y2 - LABEL_ROW * (n - i) - 4;
+              return { m, key, y, cx: lx + w / 2, cy: y + rowH / 2, left: lx, right: lx + w };
+            });
+            const top = rows[0].y, bottom = rows[n - 1].y + rowH;
+            const side = bottom < py - 16 ? "top" : top > py + ph + 16 ? "bottom" : lx > pcx ? "right" : "left";
+            return rows
+              .map(({ m, key, y, cx, cy, left, right }, i) => {
                 const color = sv !== null && carries(m, sv) ? vlanColor(sv) : vlanColor(m.untagged?.[0]);
                 labels.push({
                   gid: e.gid,
-                  x: x2 + ((n - 1) / 2) * step + 12,
-                  y: y2 - LABEL_ROW * (n - i) - 4,
-                  html: `<i class="sw" style="background:${color}"></i><b>${esc(m.label)}</b>${m.speed ? ` ${esc(m.speed)}` : ""} ${vlanChips(m, 4, `${e.cid}:${i}`)}`,
-                  open: VLAN_EXPANDED.has(`${e.cid}:${i}`),
+                  x: lx,
+                  y,
+                  html: `<i class="sw" style="background:${color}"></i><b>${esc(m.label)}</b>${m.speed ? ` ${esc(m.speed)}` : ""} ${vlanChips(m, 4, key)}`,
+                  open: VLAN_EXPANDED.has(key),
                   dim: sv !== null && !carries(m, sv),
                 });
-                return `<path class="${lineCls(m.status, m)} member" style="--c:${color}" d="M${x1 + dx},${y1} C${x1 + dx},${my} ${x2 + dx},${my} ${x2 + dx},${y2}"/>`;
+                const off = (i - (n - 1) / 2) * step;
+                let sx, sy, c1x, c1y;
+                if (side === "bottom" || side === "top") {
+                  sx = pcx + off;
+                  sy = side === "bottom" ? py + ph : py;
+                  const h = Math.max(24, Math.abs(cy - sy) / 2);
+                  c1x = sx;
+                  c1y = side === "bottom" ? sy + h : sy - h;
+                } else {
+                  sx = side === "right" ? px + pw : px;
+                  sy = pcy + off;
+                  const h = Math.max(24, Math.abs(left - sx) / 2);
+                  c1x = side === "right" ? sx + h : sx - h;
+                  c1y = sy;
+                }
+                // enter the label horizontally from the parent's side, aimed at the label's centre
+                const fromLeft = sx <= cx;
+                const edgeX = fromLeft ? left : right;
+                const h2 = Math.max(20, Math.min(90, Math.abs(edgeX - sx) / 2));
+                const c2x = fromLeft ? edgeX - h2 : edgeX + h2;
+                return `<path class="${lineCls(m.status, m)} member" style="--c:${color}" d="M${sx},${sy} C${c1x},${c1y} ${c2x},${cy} ${edgeX},${cy} L${cx},${cy}"/>`;
               })
               .join("");
           }
@@ -793,7 +856,7 @@ class OvCirrusNetworkMap extends HTMLElement {
       this._fitZoom = zoom;
       this._lastZoom = zoom;
       body = `<div class="sizer" style="width:${W * zoom}px;height:${H * zoom}px">
-          <div class="canvas${this._editLayout && this._snap ? " grid" : ""}" style="width:${W}px;height:${H}px;transform:scale(${zoom});--fs:${((this._tp || TEXT_DEFAULT) / NAME_PX).toFixed(4)};--grid:${this._grid}px">
+          <div class="canvas${this._editLayout && this._snap ? " grid" : ""}" style="width:${W}px;height:${H}px;transform:scale(${zoom});--fs:${textFs(this._tp).toFixed(4)};--grid:${this._grid}px">
             ${groups}<svg width="${W}" height="${H}">${edges}</svg>
             ${labels.map((l) => `<div class="elabel${l.dim ? " dim" : ""}${l.open ? " open" : ""}" data-gid="${esc(l.gid || "")}" style="left:${l.x}px;top:${l.y}px">${l.html}</div>`).join("")}${nodes}
           </div></div>`;
@@ -1016,26 +1079,36 @@ class OvCirrusNetworkMap extends HTMLElement {
 
   _applyServerView(view) {
     this._serverView = view || {};
-    const clamp = (v, lo, hi, d) => Math.min(hi, Math.max(lo, Number(v) || d));
     if (!this._local?.font && viewText(view)) this._tp = viewText(view);
-    if (!this._local?.client && view.client) this._cs = clamp(view.client, CS_MIN, CS_MAX, 1);
-    if (!this._local?.device && view.device) this._ds = clamp(view.device, DS_MIN, DS_MAX, 2);
+    const cs = sizeFrom(view.clients, view.client, CS_MIN, CS_MAX);
+    const ds = sizeFrom(view.devices, view.device, DS_MIN, DS_MAX);
+    if (!this._local?.client && cs) this._cs = cs;
+    if (!this._local?.device && ds) this._ds = ds;
   }
 
   _viewMenu() {
     const row = (label, key, value, hint) => `<div class="vrow"><span class="vlab">${label}<small>${hint}</small></span>
       <span class="vctl"><button data-${key}="-" aria-label="Smaller ${label.toLowerCase()}">−</button><b>${value}</b><button data-${key}="+" aria-label="Larger ${label.toLowerCase()}">+</button></span></div>`;
     const sv = this._serverView || {};
-    const saved = sv.text || sv.font || sv.client || sv.device;
+    const svCs = sizeFrom(sv.clients, sv.client, CS_MIN, CS_MAX);
+    const svDs = sizeFrom(sv.devices, sv.device, DS_MIN, DS_MAX);
+    const saved = viewText(sv) || svCs || svDs;
     return `<div class="viewmenu" role="dialog" aria-label="Map view">
-      ${row("Text", "font", `${this._tp || TEXT_DEFAULT}px`, "size of device names; other map labels follow")}
+      ${row("Text", "font", `${this._tp || TEXT_DEFAULT}pt`, "size of device names; other map labels follow")}
       ${row("Clients", "csize", `${this._cs || 1}×`, "wireless and wired clients")}
-      ${row("Devices", "dsize", `${this._ds || 2}×`, "switches, APs, gateway, client counts")}
+      ${row("Devices", "dsize", `${this._ds || 1}×`, "switches, APs, gateway, client counts")}
       <div class="vfoot">
         ${this._isAdmin ? `<button class="act" data-viewsave title="Every browser and device starts with these sizes">Save as default for all devices</button>` : ""}
         <button class="act ghost" data-viewreset>${saved ? "Use saved default" : "Reset"}</button>
-        <div class="muted">${this._viewSaved ? "Saved as the default for all devices." : "Changes are remembered in this browser."}${saved ? ` Saved default: text ${viewText(sv) || TEXT_DEFAULT}px, clients ${sv.client || 1}×, devices ${sv.device || 2}×.` : ""}</div>
-      </div></div>`;
+        <div class="muted">${this._viewSaved ? "Saved as the default for all devices." : "Changes are remembered in this browser."}${saved ? ` Saved default: text ${viewText(sv) || TEXT_DEFAULT}pt, clients ${svCs || 1}×, devices ${svDs || 1}×.` : ""}</div>
+      </div>${this._isAdmin ? `
+      <div class="vfoot backup">
+        <div class="vlab">Backup &amp; restore<small>settings, manual devices, names, layout and your device images; never your Cirrus or UniFi credentials</small></div>
+        <div class="vbtns"><button class="act" data-backup ${this._backupBusy ? "disabled" : ""}>Download backup</button>
+          <button class="act ghost" data-restore ${this._backupBusy ? "disabled" : ""}>Restore from file…</button></div>
+        <input type="file" accept=".json,application/json" data-restorefile hidden>
+        ${this._backupMsg ? `<div class="muted${this._backupMsg.error ? " err" : ""}">${esc(this._backupMsg.text)}</div>` : ""}
+      </div>` : ""}</div>`;
   }
 
   _canEditLayout() {
@@ -1335,14 +1408,14 @@ class OvCirrusNetworkMap extends HTMLElement {
     }
     const forgetLocal = () => {
       try {
-        [TEXT_KEY, FS_KEY, CS_KEY, DS_KEY].forEach((k) => localStorage.removeItem(k));
+        [TEXT_KEY, FS_KEY, CS_KEY, DS_KEY, CS_OLD_KEY, DS_OLD_KEY].forEach((k) => localStorage.removeItem(k));
       } catch (e) {
         // storage blocked: nothing stored to forget
       }
       this._local = { font: false, client: false, device: false };
     };
     root.querySelector("[data-viewsave]")?.addEventListener("click", async () => {
-      const view = { text: this._tp || TEXT_DEFAULT, client: this._cs || 1, device: this._ds || 2 };
+      const view = { text: this._tp || TEXT_DEFAULT, clients: this._cs || 1, devices: this._ds || 1 };
       try {
         await this._hass.callWS({ type: "ovcirrus/save_view", entry_id: entryId, ...view });
         forgetLocal(); // this browser now follows the saved default too
@@ -1353,24 +1426,93 @@ class OvCirrusNetworkMap extends HTMLElement {
       }
       this._render();
     });
+    const backupCount = (sm) =>
+      [
+        [sm.manual_devices, "manual device"], [sm.named_devices, "renamed device"], [sm.moved_devices, "moved device"],
+        [sm.port_names, "port name"], [sm.images, "image"],
+      ]
+        .filter(([n]) => n)
+        .map(([n, w]) => `${n} ${w}${n === 1 ? "" : "s"}`)
+        .join(", ") || "no map changes";
+    root.querySelector("[data-backup]")?.addEventListener("click", async () => {
+      this._backupBusy = true;
+      this._backupMsg = { text: "Preparing backup…" };
+      this._render();
+      try {
+        const backup = await this._hass.callWS({ type: "ovcirrus/backup", entry_id: entryId });
+        const blob = new Blob([JSON.stringify(backup, null, 2)], { type: "application/json" });
+        const a = document.createElement("a");
+        const name = String(backup.entry?.title || "ovcirrus").replace(/[^\w.-]+/g, "-").toLowerCase();
+        a.href = URL.createObjectURL(blob);
+        a.download = `ovcirrus-backup-${name}-${backup.created?.slice(0, 10) || "now"}.json`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+        const skipped = backup.images_skipped?.length ? ` ${backup.images_skipped.length} large image(s) left out.` : "";
+        this._backupMsg = { text: `Backup downloaded: ${backupCount(backup.summary || {})}.${skipped}` };
+      } catch (err) {
+        this._backupMsg = { text: `Backup failed: ${err?.message || err}`, error: true };
+      }
+      this._backupBusy = false;
+      this._render();
+    });
+    root.querySelector("[data-restore]")?.addEventListener("click", () => root.querySelector("[data-restorefile]")?.click());
+    root.querySelector("[data-restorefile]")?.addEventListener("change", async (ev) => {
+      const file = ev.target.files?.[0];
+      if (!file) return;
+      let backup;
+      try {
+        backup = JSON.parse(await file.text());
+        if (backup?.format !== "ovcirrus-backup") throw new Error("not an OmniVista Cirrus backup");
+      } catch (err) {
+        this._backupMsg = { text: `Can't read ${file.name}: ${err?.message || err}`, error: true };
+        this._render();
+        return;
+      }
+      const when = backup.created ? new Date(backup.created).toLocaleString() : "an unknown date";
+      const ok = window.confirm(
+        `Restore the backup from ${when} (version ${backup.integration_version || "?"})?\n\n` +
+          `It contains ${backupCount(backup.summary || {})}.\n\n` +
+          "This replaces the current settings, manual devices, names and layout. Your credentials stay as they are. " +
+          "The integration reloads afterwards."
+      );
+      if (!ok) return;
+      this._backupBusy = true;
+      this._backupMsg = { text: "Restoring…" };
+      this._render();
+      try {
+        const res = await this._hass.callWS({ type: "ovcirrus/restore", entry_id: entryId, backup });
+        const notes = res.notes?.length ? ` ${res.notes.join(" ")}` : "";
+        this._backupMsg = { text: `Restored ${backupCount(res.summary || {})}. Reloading the integration…${notes}` };
+        forgetLocal(); // follow the restored saved view
+        this._localOffsets = {};
+        [3000, 8000].forEach((t) => setTimeout(() => this._fetch(), t));
+      } catch (err) {
+        this._backupMsg = { text: `Restore failed: ${err?.message || err}`, error: true };
+      }
+      this._backupBusy = false;
+      this._render();
+    });
     root.querySelector("[data-viewreset]")?.addEventListener("click", () => {
       forgetLocal();
       const sv = this._serverView || {};
       const cfg = this._config;
       this._tp = viewText(sv) || configText(cfg);
-      this._cs = Math.min(CS_MAX, Math.max(CS_MIN, sv.client || Number(cfg.client_scale) || 1));
-      this._ds = Math.min(DS_MAX, Math.max(DS_MIN, sv.device || Number(cfg.device_scale) || 2));
+      this._cs = sizeFrom(sv.clients, sv.client, CS_MIN, CS_MAX) || this._cfgClient();
+      this._ds = sizeFrom(sv.devices, sv.device, DS_MIN, DS_MAX) || this._cfgDevice();
       this._viewSaved = false;
       this._render();
     });
     root.querySelectorAll("[data-csize]").forEach((b) =>
       b.addEventListener("click", () => {
         const step = b.dataset.csize === "+" ? CS_STEP : -CS_STEP;
-        this._cs = Math.min(CS_MAX, Math.max(CS_MIN, (this._cs || 1) + step));
+        this._cs = clampSize((this._cs || 1) + step, CS_MIN, CS_MAX);
         this._local = { ...this._local, client: true };
         this._viewSaved = false;
         try {
           localStorage.setItem(CS_KEY, String(this._cs));
+          localStorage.removeItem(CS_OLD_KEY);
         } catch (e) {
           // storage blocked: the size still applies until the page reloads
         }
@@ -1380,11 +1522,12 @@ class OvCirrusNetworkMap extends HTMLElement {
     root.querySelectorAll("[data-dsize]").forEach((b) =>
       b.addEventListener("click", () => {
         const step = b.dataset.dsize === "+" ? DS_STEP : -DS_STEP;
-        this._ds = Math.min(DS_MAX, Math.max(DS_MIN, (this._ds || 2) + step));
+        this._ds = clampSize((this._ds || 1) + step, DS_MIN, DS_MAX);
         this._local = { ...this._local, device: true };
         this._viewSaved = false;
         try {
           localStorage.setItem(DS_KEY, String(this._ds));
+          localStorage.removeItem(DS_OLD_KEY);
         } catch (e) {
           // storage blocked: the size still applies until the page reloads
         }
@@ -1411,6 +1554,11 @@ class OvCirrusNetworkMap extends HTMLElement {
         const z = this._zoom ?? this._fitZoom ?? 1;
         if (b.dataset.zoom === "fit") this._zoom = null;
         else this._zoom = Math.min(2, Math.max(0.2, z * (b.dataset.zoom === "+" ? 1.2 : 1 / 1.2)));
+        try {
+          localStorage.setItem(ZOOM_KEY, this._zoom == null ? "fit" : this._zoom.toFixed(3));
+        } catch (e) {
+          // storage blocked: the zoom still applies until the page reloads
+        }
         this._render();
       })
     );
@@ -1470,6 +1618,9 @@ const STYLE = `
   .vctl button:hover, .viewbtn:hover { border-color:var(--primary-color); }
   .vfoot { display:grid; gap:6px; border-top:1px solid var(--divider-color); padding-top:8px; }
   .vfoot .act { margin-top:0; }
+  .vfoot.backup { margin-top:8px; }
+  .vbtns { display:flex; gap:6px; flex-wrap:wrap; }
+  .vfoot .muted.err { color:var(--error-color,#db4437); }
   .zoom .grp { display:inline-flex; align-items:center; gap:2px; padding:2px 3px 2px 6px; border:1px solid var(--divider-color);
     border-radius:8px; color:var(--secondary-text-color); }
   .zoom .grp:first-child { padding-left:3px; }

@@ -63,12 +63,12 @@ height: 640               # px
 refresh: 30               # seconds
 expand_clients: false     # start with AP client lists expanded
 max_columns: 3            # client chips per row inside an SSID box
-text_size: 16             # px size of device names (10-26); other map labels scale with it; viewers can change it in the View menu
+text_size: 12             # pt size of device names (8-30); other map labels scale with it; viewers can change it in the View menu
 layout_editing: admin     # who can drag devices and save the layout: admin (default), true or false
 snap_to_grid: true        # snap dragged devices to a grid (viewers can toggle it in edit mode)
 grid_size: 20             # grid spacing in px
-device_scale: 2           # starting size of gateways, switches, APs and wired devices (1-3); viewers can change it
-client_scale: 1           # starting size of wireless and wired clients (0.75-2.5); viewers can change it
+device_size: 1            # starting size of gateways, switches, APs and wired devices (0.5-2); viewers can change it
+client_size: 1            # starting size of wireless and wired clients (0.25-2); viewers can change it
 show_vlans: true          # VLAN legend above the map
 ```
 
@@ -141,6 +141,16 @@ Full scans use nmap when Home Assistant can find it. The integration does not in
 - **UniFi gateway** (Options → *UniFi gateway*, local read-only account): the gateway's last speed test, WAN status, WAN IP and ISP. Adds sensors (WAN download/upload/latency, last speed test, WAN IP, ISP) and an *Internet* connectivity binary sensor.
 
 The newest result is shown on the Internet → gateway link, and both appear in the Internet node's details.
+
+## Backup & restore
+
+Admins get **Backup & restore** in the map's **View** menu. **Download backup** saves one JSON file with the
+integration's options, site selection, manual devices and scan results, device names and types, the map layout,
+port names, the saved view and your own device images from `/config/www/ovcirrus` (up to 2 MB). Credentials (Cirrus
+app ID / secret, UniFi password) are never included.
+
+**Restore from file…** replaces those settings with the backup's, keeps the credentials already set up here, and
+reloads the integration. To move to a new Home Assistant, add the integration with your credentials first, then restore.
 
 ## Installation
 

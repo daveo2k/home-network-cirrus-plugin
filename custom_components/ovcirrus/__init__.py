@@ -19,6 +19,7 @@ from homeassistant.helpers.typing import ConfigType
 
 from .api import CirrusClient
 from .assets import AssetCache
+from .backup import BackupError, async_build_backup, async_restore_backup
 from homeassistant.components import panel_custom
 
 from .const import (
@@ -105,6 +106,8 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     websocket_api.async_register_command(hass, ws_label_port)
     websocket_api.async_register_command(hass, ws_save_view)
     websocket_api.async_register_command(hass, ws_reset_positions)
+    websocket_api.async_register_command(hass, ws_backup)
+    websocket_api.async_register_command(hass, ws_restore)
     return True
 
 
@@ -396,7 +399,9 @@ def ws_remove_device(hass: HomeAssistant, connection: websocket_api.ActiveConnec
     {
         vol.Required("type"): "ovcirrus/save_view",
         vol.Required("entry_id"): str,
-        vol.Optional("text"): vol.Any(None, vol.All(vol.Coerce(int), vol.Range(min=8, max=40))),
+        vol.Optional("text"): vol.Any(None, vol.All(vol.Coerce(int), vol.Range(min=6, max=40))),
+        vol.Optional("clients"): vol.Any(None, vol.All(vol.Coerce(float), vol.Range(min=0.1, max=3))),
+        vol.Optional("devices"): vol.Any(None, vol.All(vol.Coerce(float), vol.Range(min=0.1, max=3))),
         vol.Optional("font"): vol.Any(None, vol.All(vol.Coerce(float), vol.Range(min=0.5, max=3))),
         vol.Optional("client"): vol.Any(None, vol.All(vol.Coerce(float), vol.Range(min=0.5, max=3))),
         vol.Optional("device"): vol.Any(None, vol.All(vol.Coerce(float), vol.Range(min=0.5, max=4))),
@@ -404,12 +409,12 @@ def ws_remove_device(hass: HomeAssistant, connection: websocket_api.ActiveConnec
 )
 @callback
 def ws_save_view(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict) -> None:
-    """Save text (px) / client / device sizes as the default for every browser (None clears)."""
+    """Save text (pt) / client / device sizes as the default for every browser (None clears)."""
     coordinator = _coordinator(hass, msg["entry_id"])
     if not coordinator:
         connection.send_error(msg["id"], "not_found", "Unknown entry")
         return
-    coordinator.store.view = {k: msg[k] for k in ("text", "font", "client", "device") if msg.get(k) is not None}
+    coordinator.store.view = {k: msg[k] for k in ("text", "clients", "devices") if msg.get(k) is not None}
     coordinator.store.schedule_save()
     connection.send_result(msg["id"], {"view": coordinator.store.view})
 
@@ -466,4 +471,38 @@ async def ws_discover(hass: HomeAssistant, connection: websocket_api.ActiveConne
         connection.send_error(msg["id"], "not_found", "Unknown entry")
         return
     result = await coordinator.async_discover(str(addr), msg["mode"])
+    connection.send_result(msg["id"], result)
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command({vol.Required("type"): "ovcirrus/backup", vol.Required("entry_id"): str})
+@websocket_api.async_response
+async def ws_backup(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict) -> None:
+    """Everything this entry keeps (options, map/device store, your device images), without credentials."""
+    coordinator = _coordinator(hass, msg["entry_id"])
+    if not coordinator:
+        connection.send_error(msg["id"], "not_found", "Unknown entry")
+        return
+    entry = hass.config_entries.async_get_entry(msg["entry_id"])
+    connection.send_result(msg["id"], await async_build_backup(hass, entry, coordinator.store))
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command(
+    {vol.Required("type"): "ovcirrus/restore", vol.Required("entry_id"): str, vol.Required("backup"): dict}
+)
+@websocket_api.async_response
+async def ws_restore(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict) -> None:
+    """Replace this entry's options, map/device store and images with a backup; the entry then reloads."""
+    coordinator = _coordinator(hass, msg["entry_id"])
+    if not coordinator:
+        connection.send_error(msg["id"], "not_found", "Unknown entry")
+        return
+    entry = hass.config_entries.async_get_entry(msg["entry_id"])
+    try:
+        result = await async_restore_backup(hass, entry, coordinator.store, msg["backup"])
+    except BackupError as err:
+        connection.send_error(msg["id"], "invalid_backup", str(err))
+        return
+    _LOGGER.info("ovcirrus: restored backup into %s: %s", entry.title, result["summary"])
     connection.send_result(msg["id"], result)
