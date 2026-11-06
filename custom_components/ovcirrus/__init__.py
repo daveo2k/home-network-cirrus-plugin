@@ -41,6 +41,7 @@ from .const import (
     VERSION,
 )
 from .coordinator import CirrusCoordinator
+from .history import RANGES
 from .identify import TYPES
 from .mac_table import norm_mac
 from .store import EntryStore
@@ -136,7 +137,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: CirrusConfigEntry) -> bo
     coordinator = CirrusCoordinator(hass, entry, client, hass.data[DOMAIN]["assets"], store)
     await coordinator.async_config_entry_first_refresh()
     entry.runtime_data = coordinator
-    coordinator.start_rate_history()
+    await coordinator.start_rate_history()
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     entry.async_on_unload(entry.add_update_listener(_async_reload))
     await _async_update_panel(hass, loading=entry.entry_id)
@@ -514,7 +515,7 @@ async def ws_restore(hass: HomeAssistant, connection: websocket_api.ActiveConnec
     {
         vol.Required("type"): "ovcirrus/rates",
         vol.Required("entry_id"): str,
-        vol.Optional("range", default="2h"): vol.In(["30m", "2h", "24h"]),
+        vol.Optional("range", default="2h"): vol.In(list(RANGES)),
     }
 )
 @callback
@@ -524,4 +525,11 @@ def ws_rates(hass: HomeAssistant, connection: websocket_api.ActiveConnection, ms
     if not coordinator:
         connection.send_error(msg["id"], "not_found", "Unknown entry")
         return
-    connection.send_result(msg["id"], {**coordinator.rates.series(msg["range"]), "step": 15, "enabled": bool(coordinator.unifi)})
+    connection.send_result(msg["id"], {
+            **coordinator.rates.series(msg["range"]),
+            "step": coordinator.rate_interval,
+            "fine": coordinator.rates.fine_seconds,
+            "long": coordinator.rates.long_seconds,
+            "ranges": coordinator.rates.ranges(),
+            "enabled": bool(coordinator.unifi),
+        })

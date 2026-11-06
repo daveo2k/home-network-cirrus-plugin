@@ -167,9 +167,17 @@ function apSvg(g, status, mini) {
 }
 
 // ---------- live traffic (UniFi gateway ports): bytes/s in, bits/s out ----------
+let RATE_UNIT = "bits"; // "bits" (b/s, kb/s, Mb/s) or "bytes" (B/s, kB/s, MB/s), set in the View menu
+const RATE_UNIT_KEY = "ovcirrus-rate-unit";
 function fmtRate(bytes) {
   const b = num(bytes);
   if (b === null) return "";
+  if (RATE_UNIT === "bytes") {
+    if (b < 1000) return `${Math.round(b)} B/s`;
+    if (b < 1e6) return `${Math.round(b / 1000)} kB/s`;
+    if (b < 1e9) return `${(b / 1e6).toFixed(b < 1e7 ? 1 : 0)} MB/s`;
+    return `${(b / 1e9).toFixed(2)} GB/s`;
+  }
   const bits = b * 8;
   if (bits < 1000) return `${Math.round(bits)} b/s`;
   if (bits < 1e6) return `${Math.round(bits / 1000)} kb/s`;
@@ -210,6 +218,29 @@ let RATES = {}; // range -> ovcirrus/rates result
 let LINK_GRAPHS = false; // small traffic trend on the map's link labels
 const LINK_GRAPHS_KEY = "ovcirrus-link-graphs";
 const SPARK_W = 44, SPARK_H = 12;
+// Chart ranges: key, button label, seconds, x-axis tick step. Which buttons show is set in the View menu;
+// ranges longer than the history the integration keeps are left out.
+const RANGE_DEFS = [
+  ["15m", "15 min", 900, 300],
+  ["30m", "30 min", 1800, 300],
+  ["1h", "1 h", 3600, 900],
+  ["2h", "2 h", 7200, 1800],
+  ["6h", "6 h", 21600, 3600],
+  ["12h", "12 h", 43200, 7200],
+  ["24h", "24 h", 86400, 10800],
+  ["3d", "3 days", 259200, 43200],
+  ["7d", "7 days", 604800, 86400],
+];
+const RANGE_INFO = Object.fromEntries(RANGE_DEFS.map(([k, l, s, x]) => [k, { label: l, span: s, xstep: x }]));
+const RANGES_DEFAULT = ["30m", "2h", "24h"];
+const RANGES_KEY = "ovcirrus-rate-ranges";
+const RANGE_KEY = "ovcirrus-rate-range";
+// The history kept by the integration (from the last ovcirrus/rates answer): which ranges it can fill.
+const rangesAvailable = () => {
+  const r = Object.values(RATES).find((d) => d?.ranges);
+  return r ? r.ranges : RANGE_DEFS.map((d) => d[0]);
+};
+const rateStep = () => Object.values(RATES).find((d) => d?.step)?.step || 15;
 // [[t, down, up]] in bytes/s; ↓ is towards the device further from the Internet (WAN: into the gateway)
 function ratePoints(range, port) {
   const d = RATES[range];
@@ -235,16 +266,42 @@ const hhmm = (t) => {
   const d = new Date(t * 1000);
   return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
 };
+const DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const dayTime = (t) => `${DAYS[new Date(t * 1000).getDay()]} ${hhmm(t)}`;
+// Local midnight / noon ticks for the multi-day ranges, round hours or minutes otherwise.
+function timeTicks(t0, t1, step) {
+  const out = [];
+  if (step >= 43200) {
+    const d = new Date(t0 * 1000);
+    d.setHours(step >= 86400 ? 0 : d.getHours() < 12 ? 0 : 12, 0, 0, 0);
+    for (let t = d.getTime() / 1000; t <= t1; ) {
+      if (t >= t0) out.push(t);
+      const n = new Date(t * 1000);
+      n.setHours(n.getHours() + step / 3600);
+      t = n.getTime() / 1000;
+    }
+    return out;
+  }
+  const off = new Date(t0 * 1000).getTimezoneOffset() * 60; // keep hour ticks on local hours
+  for (let t = Math.ceil((t0 - off) / step) * step + off; t <= t1; t += step) if (t >= t0) out.push(t);
+  return out;
+}
 // Area (↓) + line (↑) chart of one port, Mbit/s (kbit/s when small) against time, with the peak marked.
 function bandwidthChart(pts, range, dnLabel, upLabel) {
   const W = 420, H = 206, L = 40, R = 12, T = 24, B = 24;
   if (pts.length < 2)
-    return `<div class="uchart-empty">Collecting traffic… the graph fills in as readings arrive (every 15 s).</div>`;
-  const span = { "30m": 1800, "2h": 7200, "24h": 86400 }[range] || 7200;
+    return `<div class="uchart-empty">Collecting traffic… the graph fills in as readings arrive (every ${rateStep()} s).</div>`;
+  const info = RANGE_INFO[range] || RANGE_INFO["2h"];
+  const span = info.span;
   const t1 = pts[pts.length - 1][0], t0 = t1 - span;
-  const peakBits = Math.max(...pts.map((p) => Math.max(p[1], p[2]))) * 8;
-  const unit = peakBits >= 1e6 ? ["Mbit/s", 1e6] : ["kbit/s", 1e3];
-  const val = (b) => (b * 8) / unit[1];
+  const peakB = Math.max(...pts.map((p) => Math.max(p[1], p[2])));
+  // unit name and bytes/s per unit
+  const unit =
+    RATE_UNIT === "bytes"
+      ? peakB >= 1e6 ? ["MB/s", 1e6] : ["kB/s", 1e3]
+      : peakB * 8 >= 1e6 ? ["Mbit/s", 1e6 / 8] : ["kbit/s", 1e3 / 8];
+  const val = (b) => b / unit[1];
+  const tlabel = info.xstep >= 86400 ? (t) => `${DAYS[new Date(t * 1000).getDay()]} ${new Date(t * 1000).getDate()}` : info.xstep >= 43200 ? dayTime : hhmm;
   const top = Math.max(...pts.map((p) => Math.max(val(p[1]), val(p[2])))) * 1.05 || 1;
   const step = niceMax(top / 4);
   const ymax = Math.ceil(top / step) * step;
@@ -253,9 +310,7 @@ function bandwidthChart(pts, range, dnLabel, upLabel) {
   const fmt = (v) => (v >= 100 ? Math.round(v) : v >= 10 ? +v.toFixed(1) : +v.toFixed(v >= 1 ? 1 : 2));
   const yt = [];
   for (let v = 0; v <= ymax + step / 2; v += step) yt.push(v);
-  const xstep = { "30m": 300, "2h": 1800, "24h": 10800 }[range] || 1800;
-  const xt = [];
-  for (let t = Math.ceil(t0 / xstep) * xstep; t <= t1; t += xstep) xt.push(t);
+  const xt = timeTicks(t0, t1, info.xstep);
   const path = (k) => pts.map((p, i) => `${i ? "L" : "M"}${X(p[0]).toFixed(1)},${Y(val(p[k])).toFixed(1)}`).join("");
   const dn = path(1), up = path(2);
   const baseY = Y(0).toFixed(1);
@@ -263,9 +318,9 @@ function bandwidthChart(pts, range, dnLabel, upLabel) {
   const px = X(peak[0]), py = Y(val(peak[1]));
   const peakLabel = `Max ${fmt(val(peak[1]))} ${unit[0]}`;
   const lx = Math.min(Math.max(px + 6, L + 2), W - R - peakLabel.length * 5.6);
-  return `<svg class="uchart" viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(dnLabel)} and ${esc(upLabel)} over ${esc(range)}" data-t0="${t0}" data-span="${span}" data-l="${L}" data-r="${R}" data-w="${W}" data-t="${T}" data-b="${B}" data-h="${H}" data-ymax="${ymax}" data-unit="${unit[1]}" data-uname="${unit[0]}">
+  return `<svg class="uchart" viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(dnLabel)} and ${esc(upLabel)} over ${esc(info.label)}" data-long="${info.xstep >= 43200 ? 1 : 0}" data-t0="${t0}" data-span="${span}" data-l="${L}" data-r="${R}" data-w="${W}" data-t="${T}" data-b="${B}" data-h="${H}" data-ymax="${ymax}" data-unit="${unit[1]}" data-uname="${unit[0]}">
     ${yt.map((v) => `<line class="grid" x1="${L}" x2="${W - R}" y1="${Y(v).toFixed(1)}" y2="${Y(v).toFixed(1)}"/><text class="ytick" x="${L - 5}" y="${(Y(v) + 3).toFixed(1)}">${fmt(v)}</text>`).join("")}
-    ${xt.map((t) => `<line class="grid v" x1="${X(t).toFixed(1)}" x2="${X(t).toFixed(1)}" y1="${T}" y2="${H - B}"/><text class="xtick" x="${X(t).toFixed(1)}" y="${H - 8}">${hhmm(t)}</text>`).join("")}
+    ${xt.map((t) => `<line class="grid v" x1="${X(t).toFixed(1)}" x2="${X(t).toFixed(1)}" y1="${T}" y2="${H - B}"/><text class="xtick" x="${X(t).toFixed(1)}" y="${H - 8}">${tlabel(t)}</text>`).join("")}
     <text class="yunit" x="4" y="10">${unit[0]}</text>
     <path class="area dn" d="${dn}L${X(pts[pts.length - 1][0]).toFixed(1)},${baseY}L${X(pts[0][0]).toFixed(1)},${baseY}Z"/>
     <path class="line dn" d="${dn}"/><path class="line up" d="${up}"/>
@@ -473,6 +528,21 @@ class OvCirrusNetworkMap extends HTMLElement {
       lg = null;
     }
     this._linkGraphs = lg === null ? !!this._config.link_graphs : lg === "1";
+    let ru = null, rr = null, r1 = null;
+    try {
+      ru = localStorage.getItem(RATE_UNIT_KEY);
+      rr = JSON.parse(localStorage.getItem(RANGES_KEY) || "null");
+      r1 = localStorage.getItem(RANGE_KEY);
+    } catch (e) {
+      ru = rr = r1 = null;
+    }
+    const cfgRanges = Array.isArray(this._config.rate_ranges) ? this._config.rate_ranges.map(String) : null;
+    const pick = (list) => (Array.isArray(list) ? list.filter((k) => RANGE_INFO[k]) : []);
+    this._rateRanges = pick(rr).length ? pick(rr) : pick(cfgRanges).length ? pick(cfgRanges) : [...RANGES_DEFAULT];
+    this._rateUnit = ru === "bytes" || ru === "bits" ? ru : this._config.rate_unit === "bytes" ? "bytes" : "bits";
+    RATE_UNIT = this._rateUnit;
+    if (RANGE_INFO[r1]) this._rRange = r1;
+    else if (RANGE_INFO[this._config.rate_range]) this._rRange = this._config.rate_range;
     this._local = { ...(this._local || {}), font: !!stored };
   }
 
@@ -504,7 +574,7 @@ class OvCirrusNetworkMap extends HTMLElement {
       this._fetch();
       this._timer = setInterval(() => this._fetch(), Math.max(10, this._config.refresh) * 1000);
     }
-    if (!this._rTimer) this._rTimer = setInterval(() => this._fetchRates(), 15000);
+    if (!this._rTimer) this._rTimer = setInterval(() => this._fetchRates(), 5000);
     const dark = !!hass?.themes?.darkMode;
     if (dark !== this.hasAttribute("dark")) this.toggleAttribute("dark", dark);
   }
@@ -515,16 +585,34 @@ class OvCirrusNetworkMap extends HTMLElement {
     if (!site) return [];
     const want = new Set();
     const sel = this._selected && this._index?.get(this._selected);
-    if (sel?.unifi) want.add(this._rRange || "2h");
+    if (sel?.unifi) want.add(this._chartRange());
     if (LINK_GRAPHS && [...(this._index?.values() || [])].some((n) => n.unifi)) want.add("30m");
     return [...want];
   }
 
-  async _fetchRates() {
-    const want = this._ratesWanted();
+  // The range the chart shows: the one picked, if its button is shown and the history covers it.
+  _chartRange() {
+    const shown = this._shownRanges();
+    return shown.includes(this._rRange) ? this._rRange : shown.includes("2h") ? "2h" : shown[0] || "2h";
+  }
+
+  _hasUnifi() {
+    return [...(this._index?.values() || [])].some((n) => n.unifi);
+  }
+
+  _shownRanges() {
+    const avail = rangesAvailable();
+    const list = RANGE_DEFS.map((d) => d[0]).filter((k) => this._rateRanges.includes(k) && avail.includes(k));
+    return list.length ? list : avail.slice(0, 1);
+  }
+
+  async _fetchRates(force) {
+    const stale = (r) => !RATES[r] || Date.now() - (RATES[r]._at || 0) >= rateStep() * 1000 - 500;
+    const want = this._ratesWanted().filter((r) => force || stale(r));
     const entryId = this._sites?.[this._siteIdx]?.entry_id;
     if (!want.length || !entryId || !this._hass || this._rLoading) return;
     this._rLoading = true;
+    const before = rangesAvailable().join();
     try {
       for (const range of want) {
         RATES[range] = await this._hass.callWS({ type: "ovcirrus/rates", entry_id: entryId, range });
@@ -534,14 +622,15 @@ class OvCirrusNetworkMap extends HTMLElement {
       console.debug("ovcirrus: rates", err);
     }
     this._rLoading = false;
-    this._updateRates();
+    if (rangesAvailable().join() !== before) this._render(); // the range buttons depend on the history kept
+    else this._updateRates();
   }
 
   // Refresh the graphs in place (no full redraw, so hovering and scrolling are undisturbed).
   _updateRates() {
     const root = this.shadowRoot;
     root.querySelectorAll(".lspark[data-port]").forEach((el) => (el.innerHTML = sparkSvg(ratePoints("30m", el.dataset.port))));
-    const range = this._rRange || "2h";
+    const range = this._chartRange();
     root.querySelectorAll(".tspark[data-port]").forEach((el) => {
       if (el.innerHTML) el.innerHTML = sparkSvg(ratePoints(range, el.dataset.port), 48, 16);
     });
@@ -566,7 +655,8 @@ class OvCirrusNetworkMap extends HTMLElement {
     const [W, L, R, T, B, H] = ["w", "l", "r", "t", "b", "h"].map((k) => Number(d[k]));
     const t0 = Number(d.t0), span = Number(d.span), ymax = Number(d.ymax), unit = Number(d.unit);
     const X = (t) => L + ((t - t0) / span) * (W - L - R);
-    const Y = (b) => T + (1 - (b * 8) / unit / ymax) * (H - T - B);
+    const Y = (b) => T + (1 - b / unit / ymax) * (H - T - B);
+    const tl = d.long === "1" ? dayTime : hhmm;
     const g = svg.querySelector(".hover");
     const show = (ev) => {
       const box = svg.getBoundingClientRect();
@@ -585,7 +675,7 @@ class OvCirrusNetworkMap extends HTMLElement {
       uDot.setAttribute("cx", cx);
       uDot.setAttribute("cy", Y(best[2]));
       tip.hidden = false;
-      tip.innerHTML = `<b>${hhmm(best[0])}</b><span><i class="key dn"></i>↓ ${esc(fmtRate(best[1]))}</span><span><i class="key up"></i>↑ ${esc(fmtRate(best[2]))}</span>`;
+      tip.innerHTML = `<b>${tl(best[0])}</b><span><i class="key dn"></i>↓ ${esc(fmtRate(best[1]))}</span><span><i class="key up"></i>↑ ${esc(fmtRate(best[2]))}</span>`;
       const px = (cx / W) * box.width;
       tip.style.left = `${Math.min(box.width - tip.offsetWidth - 4, Math.max(4, px + 10))}px`;
     };
@@ -615,7 +705,7 @@ class OvCirrusNetworkMap extends HTMLElement {
       this._fetch();
       this._timer = setInterval(() => this._fetch(), Math.max(10, this._config.refresh) * 1000);
     }
-    if (this._hass && !this._rTimer) this._rTimer = setInterval(() => this._fetchRates(), 15000);
+    if (this._hass && !this._rTimer) this._rTimer = setInterval(() => this._fetchRates(), 5000);
   }
 
   disconnectedCallback() {
@@ -952,6 +1042,12 @@ class OvCirrusNetworkMap extends HTMLElement {
     const site = this._sites?.[this._siteIdx];
     const prevVp = this.shadowRoot.querySelector(".viewport");
     const scroll = prevVp ? [prevVp.scrollLeft, prevVp.scrollTop] : null;
+    // Keep the open details panel (and View menu) where it was scrolled to when the same one is redrawn,
+    // e.g. after picking a chart range or port.
+    const prevPanel = this.shadowRoot.querySelector(".panel");
+    const panelScroll = prevPanel && this._panelFor === this._selected ? prevPanel.scrollTop : 0;
+    const prevMenu = this.shadowRoot.querySelector(".viewmenu");
+    const menuScroll = prevMenu ? prevMenu.scrollTop : 0;
 
     let body = "";
     let W = 0;
@@ -1376,6 +1472,11 @@ class OvCirrusNetworkMap extends HTMLElement {
       }
     }
     if (scroll && vp) [vp.scrollLeft, vp.scrollTop] = scroll;
+    const panelEl = this.shadowRoot.querySelector(".panel");
+    if (panelEl && panelScroll) panelEl.scrollTop = panelScroll;
+    this._panelFor = this._selected;
+    const menu = this.shadowRoot.querySelector(".viewmenu");
+    if (menu && menuScroll) menu.scrollTop = menuScroll;
     this._bind();
   }
 
@@ -1397,8 +1498,8 @@ class OvCirrusNetworkMap extends HTMLElement {
     const last = pts[pts.length - 1];
     const now = (k) => (last ? fmtRate(last[k]) : "–");
     return `<div class="uchead"><b>${esc(title)}</b><span class="muted">${esc(port)}${wan && title !== "WAN" ? " · WAN" : ""}</span>
-        <span class="rchips">${[["30m", "30 min"], ["2h", "2 h"], ["24h", "24 h"]]
-          .map(([k, l]) => `<button class="rchip${k === range ? " on" : ""}" data-rrange="${k}">${l}</button>`)
+        <span class="rchips">${this._shownRanges()
+          .map((k) => `<button class="rchip${k === range ? " on" : ""}" data-rrange="${k}">${RANGE_INFO[k].label}</button>`)
           .join("")}</span></div>
       <div class="ulegend"><span><i class="key dn"></i>↓ ${esc(dnLabel)} <b data-now="dn">${esc(now(1))}</b></span><span><i class="key up"></i>↑ ${esc(upLabel)} <b data-now="up">${esc(now(2))}</b></span></div>
       <div class="uchartwrap" data-port="${esc(port)}" data-range="${range}" data-dn="${esc(dnLabel)}" data-up="${esc(upLabel)}">${bandwidthChart(pts, range, dnLabel, upLabel)}<div class="utip" hidden></div></div>`;
@@ -1408,7 +1509,7 @@ class OvCirrusNetworkMap extends HTMLElement {
   _unifiBlock(sel) {
     const u = sel?.unifi;
     if (!u) return "";
-    const range = this._rRange || "2h";
+    const range = this._chartRange();
     const port = this._rPort || (u.ports || []).find((p) => p.role === "wan")?.ifname || u.ports?.[0]?.ifname;
     const pct = (v) => (num(v) === null ? "" : `${Math.round(v)}%`);
     const bytes = (v) => (num(v) === null ? "" : v >= 1e9 ? `${(v / 1e9).toFixed(1)} GB` : v >= 1e6 ? `${Math.round(v / 1e6)} MB` : `${Math.round(v / 1e3)} kB`);
@@ -1465,8 +1566,20 @@ class OvCirrusNetworkMap extends HTMLElement {
       ${row("Text", "font", `${this._tp || TEXT_DEFAULT}pt`, "size of device names; other map labels follow")}
       ${row("Clients", "csize", `${this._cs || 1}×`, "wireless and wired clients")}
       ${row("Devices", "dsize", `${this._ds || 1}×`, "switches, APs, gateway, client counts")}
+      ${this._hasUnifi() ? `<div class="vsec">Bandwidth graphs</div>
+      <div class="vrow vstack"><span class="vlab">Range buttons<small>which time ranges the gateway chart offers${
+        rangesAvailable().length < RANGE_DEFS.length ? "; longer ones need a longer history in the integration options" : ""
+      }</small></span>
+        <span class="vchips">${RANGE_DEFS.map(([k, l]) => {
+          const ok = rangesAvailable().includes(k), on = this._rateRanges.includes(k);
+          return `<button class="rchip${on ? " on" : ""}" data-rangeopt="${k}" aria-pressed="${on}" ${ok ? "" : 'disabled title="Not kept: raise the long history in the integration options"'}>${l}</button>`;
+        }).join("")}</span></div>
+      <div class="vrow"><span class="vlab">Units<small>for live rates and the graphs</small></span>
+        <span class="vchips">${[["bits", "bits/s"], ["bytes", "bytes/s"]]
+          .map(([k, l]) => `<button class="rchip${this._rateUnit === k ? " on" : ""}" data-runit="${k}" aria-pressed="${this._rateUnit === k}">${l}</button>`)
+          .join("")}</span></div>
       <label class="vrow vtoggle"><span class="vlab">Traffic graphs on links<small>a small 30-minute trend next to each gateway link's live rate</small></span>
-        <input type="checkbox" data-linkgraphs ${this._linkGraphs ? "checked" : ""}></label>
+        <input type="checkbox" data-linkgraphs ${this._linkGraphs ? "checked" : ""}></label>` : ""}
       <div class="vfoot">
         ${this._isAdmin ? `<button class="act" data-viewsave title="Every browser and device starts with these sizes">Save as default for all devices</button>` : ""}
         <button class="act ghost" data-viewreset>${saved ? "Use saved default" : "Reset"}</button>
@@ -1928,9 +2041,34 @@ class OvCirrusNetworkMap extends HTMLElement {
       }
       this._render();
     });
+    const keep = (key, value) => {
+      try {
+        localStorage.setItem(key, value);
+      } catch (e) {
+        // storage blocked: applies until the page reloads
+      }
+    };
     root.querySelectorAll("[data-rrange]").forEach((b) =>
       b.addEventListener("click", () => {
         this._rRange = b.dataset.rrange;
+        keep(RANGE_KEY, this._rRange);
+        this._render();
+      })
+    );
+    root.querySelectorAll("[data-rangeopt]").forEach((b) =>
+      b.addEventListener("click", () => {
+        const k = b.dataset.rangeopt;
+        const on = this._rateRanges.includes(k);
+        if (on && this._rateRanges.length === 1) return; // keep at least one
+        this._rateRanges = on ? this._rateRanges.filter((x) => x !== k) : [...this._rateRanges, k];
+        keep(RANGES_KEY, JSON.stringify(this._rateRanges));
+        this._render();
+      })
+    );
+    root.querySelectorAll("[data-runit]").forEach((b) =>
+      b.addEventListener("click", () => {
+        this._rateUnit = RATE_UNIT = b.dataset.runit;
+        keep(RATE_UNIT_KEY, this._rateUnit);
         this._render();
       })
     );
@@ -1943,8 +2081,7 @@ class OvCirrusNetworkMap extends HTMLElement {
     {
       const wrap = root.querySelector(".uchartwrap");
       if (wrap) this._bindChart(wrap, ratePoints(wrap.dataset.range, wrap.dataset.port));
-      const want = this._ratesWanted();
-      if (want.some((r) => !RATES[r] || Date.now() - (RATES[r]._at || 0) > 20000)) this._fetchRates();
+      this._fetchRates();
     }
     root.querySelectorAll("[data-zoom]").forEach((b) =>
       b.addEventListener("click", () => {
@@ -2283,8 +2420,12 @@ const STYLE = `
   table.uports tr.sel td { background:color-mix(in srgb, var(--primary-color) 9%, transparent); }
   table.uports td.trend { padding:2px 4px; width:48px; }
   table.uports td:nth-child(3), table.uports td:nth-child(1) { white-space:nowrap; }
+  .vsec { font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:.04em; color:var(--secondary-text-color); margin:6px 0 -2px; }
+  .vrow.vstack { flex-direction:column; align-items:stretch; gap:6px; }
+  .vchips { display:flex; flex-wrap:wrap; gap:4px; }
+  .rchip[disabled] { opacity:.4; cursor:not-allowed; }
   .vtoggle { cursor:pointer; } .vtoggle input { width:18px; height:18px; accent-color:var(--primary-color); }
-  .panel { position:absolute; right:12px; top:58px; width:320px; max-width:calc(100% - 24px); max-height:70%; overflow:auto;
+  .panel { overflow-anchor:none; position:absolute; right:12px; top:58px; width:320px; max-width:calc(100% - 24px); max-height:70%; overflow:auto;
     background:var(--card-background-color); border:1px solid var(--divider-color); border-radius:12px;
     box-shadow:0 4px 16px rgba(0,0,0,.2); padding:10px 12px; z-index:2; }
   .ptitle { display:flex; align-items:center; gap:8px; margin-bottom:6px; }

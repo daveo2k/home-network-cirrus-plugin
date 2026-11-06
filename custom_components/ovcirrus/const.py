@@ -57,6 +57,15 @@ CONF_UNIFI_PASSWORD = "unifi_password"
 CONF_UNIFI_SITE = "unifi_site"
 CONF_UNIFI_VERIFY_SSL = "unifi_verify_ssl"
 
+# Bandwidth history of the gateway ports (UniFi only)
+CONF_RATE_INTERVAL = "rate_interval"  # seconds between readings
+CONF_RATE_FINE_HOURS = "rate_fine_hours"  # every reading kept this long
+CONF_RATE_LONG_DAYS = "rate_long_days"  # 1-minute averages kept this long
+CONF_RATE_PERSIST = "rate_persist"  # keep the history across restarts
+DEFAULT_RATE_INTERVAL = 15
+DEFAULT_RATE_FINE_HOURS = 2
+DEFAULT_RATE_LONG_DAYS = 1
+
 # Manually added devices and service discovery
 CONF_MANUAL_DEVICES = "manual_devices"
 CONF_DISCOVERY_INTERVAL = "discovery_interval_hours"

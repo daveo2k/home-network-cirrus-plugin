@@ -75,7 +75,8 @@
           "ssh": "Switch MAC tables (SSH)",
           "dns": "Reverse DNS names",
           "manual": "Servers & manual devices",
-          "unifi": "UniFi gateway (speed test, WAN, client names)"
+          "unifi": "UniFi gateway (speed test, WAN, client names)",
+          "bandwidth": "Bandwidth history (gateway graphs)"
         }
       },
       "general": {
@@ -155,6 +156,16 @@
           "unifi_password": "Password",
           "unifi_site": "UniFi site name",
           "unifi_verify_ssl": "Verify the gateway's HTTPS certificate"
+        }
+      },
+      "bandwidth": {
+        "title": "Bandwidth history",
+        "description": "How the UniFi gateway's port traffic is recorded for the bandwidth graphs. Every reading is kept for the detailed history; after that, 1-minute averages are kept for the long history. Saved history is written to disk every few minutes and when Home Assistant stops.",
+        "data": {
+          "rate_interval": "Read the gateway every",
+          "rate_fine_hours": "Keep every reading for",
+          "rate_long_days": "Keep 1-minute averages for",
+          "rate_persist": "Keep the history when Home Assistant restarts"
         }
       }
     },

@@ -14,6 +14,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.event import async_track_time_interval
+from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .api import CirrusApiError, CirrusAuthError, CirrusClient
@@ -37,6 +38,13 @@ from .const import (
     CONF_SSH_KNOWN_HOSTS,
     CONF_SSH_PORT,
     CONF_SSH_USERNAME,
+    CONF_RATE_FINE_HOURS,
+    CONF_RATE_INTERVAL,
+    CONF_RATE_LONG_DAYS,
+    CONF_RATE_PERSIST,
+    DEFAULT_RATE_FINE_HOURS,
+    DEFAULT_RATE_INTERVAL,
+    DEFAULT_RATE_LONG_DAYS,
     CONF_UNIFI_ENABLED,
     CONF_UNIFI_HOST,
     CONF_UNIFI_PASSWORD,
@@ -171,16 +179,38 @@ class CirrusCoordinator(DataUpdateCoordinator[CirrusData]):
             else None
         )
 
-        self.rates = RateHistory()
+        self.rate_interval = int(opts.get(CONF_RATE_INTERVAL, DEFAULT_RATE_INTERVAL))
+        self.rates = RateHistory(
+            fine_seconds=int(float(opts.get(CONF_RATE_FINE_HOURS, DEFAULT_RATE_FINE_HOURS)) * 3600),
+            long_seconds=int(float(opts.get(CONF_RATE_LONG_DAYS, DEFAULT_RATE_LONG_DAYS)) * 86400),
+        )
         self._rates_unsub = None
         self._rates_busy = False
+        self._rate_store: Store | None = (
+            Store(hass, 1, f"{DOMAIN}.rates.{entry.entry_id}") if opts.get(CONF_RATE_PERSIST, True) else None
+        )
+        self._rate_save_pending = False
 
-    RATE_INTERVAL = timedelta(seconds=15)
+    RATE_SAVE_DELAY = 300  # write the saved history at most every 5 minutes (and when HA stops)
 
-    def start_rate_history(self) -> None:
-        """Read the gateway's port rates every 15 s into the in-memory history (UniFi only)."""
-        if self.unifi and not self._rates_unsub:
-            self._rates_unsub = async_track_time_interval(self.hass, self._poll_rates, self.RATE_INTERVAL)
+    async def start_rate_history(self) -> None:
+        """Read the gateway's port rates into the history every sample interval (UniFi only)."""
+        if not self.unifi or self._rates_unsub:
+            return
+        if self._rate_store:
+            try:
+                self.rates.load(await self._rate_store.async_load())
+            except Exception as err:  # a damaged file must not stop the integration
+                _LOGGER.warning("Could not read the saved bandwidth history: %s", err)
+        else:  # saving turned off: drop any history saved earlier
+            await Store(self.hass, 1, f"{DOMAIN}.rates.{self.config_entry.entry_id}").async_remove()
+        self._rates_unsub = async_track_time_interval(
+            self.hass, self._poll_rates, timedelta(seconds=max(5, self.rate_interval))
+        )
+
+    def _rate_data(self) -> dict:
+        self._rate_save_pending = False
+        return self.rates.to_dict()
 
     async def _poll_rates(self, _now=None) -> None:
         if self._rates_busy or not self.unifi:
@@ -198,6 +228,9 @@ class CirrusCoordinator(DataUpdateCoordinator[CirrusData]):
             self.rates.names[key] = {"name": p.get("name"), "role": p.get("role"), "speed": p.get("speed"), "up": p.get("up")}
             if p.get("up"):
                 self.rates.add(key, p.get("rx"), p.get("tx"))
+        if self._rate_store and not self._rate_save_pending:
+            self._rate_save_pending = True
+            self._rate_store.async_delay_save(self._rate_data, self.RATE_SAVE_DELAY)
 
     @property
     def site_ids(self) -> list[str]:
@@ -228,6 +261,8 @@ class CirrusCoordinator(DataUpdateCoordinator[CirrusData]):
         if self._rates_unsub:
             self._rates_unsub()
             self._rates_unsub = None
+        if self._rate_store and self.unifi:
+            await self._rate_store.async_save(self._rate_data())
         await super().async_shutdown()
         if self.unifi:
             await self.unifi.close()

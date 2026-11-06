@@ -70,6 +70,10 @@ grid_size: 20             # grid spacing in px
 device_size: 1            # starting size of gateways, switches, APs and wired devices (0.5-2); viewers can change it
 client_size: 1            # starting size of wireless and wired clients (0.25-2); viewers can change it
 show_vlans: true          # VLAN legend above the map
+link_graphs: false        # small traffic trend on the gateway's link labels (UniFi); viewers can toggle it
+rate_ranges: [30m, 2h, 24h]  # bandwidth chart range buttons: 15m 30m 1h 2h 6h 12h 24h 3d 7d
+rate_range: 2h            # range the bandwidth chart opens on
+rate_unit: bits           # bits (b/s, Mb/s) or bytes (B/s, MB/s) for live rates and graphs
 ```
 
 Click a node for details, use **+ / −** on a node to expand or collapse it, and the zoom buttons (or **fit**) to size the map. **View** opens the size settings: **Text** (map names and labels only), **Clients** (0.75× to 2.5×) and **Devices** (1× to 3×: rings, photos, the AP client-count bubble and brand logos). Changes are remembered in each browser. Admins can **Save as default for all devices**, which stores the sizes in Home Assistant so every browser and the app start with them. **Reset** returns to the saved default.
@@ -141,6 +145,17 @@ Full scans use nmap when Home Assistant can find it. The integration does not in
 - **UniFi gateway** (Options → *UniFi gateway*, local read-only account): the gateway's last speed test, WAN status, WAN IP and ISP. Adds sensors (WAN download/upload/latency, last speed test, WAN IP, ISP) and an *Internet* connectivity binary sensor.
 
 The newest result is shown on the Internet → gateway link, and both appear in the Internet node's details.
+
+## UniFi gateway on the map
+
+With the UniFi gateway connected, the gateway's panel shows:
+
+- **Live port panel:** each port's link state, name and speed, with the WAN port marked. The gateway's links on the map show the live traffic of the port they use, and the Internet → gateway link shows the WAN download / upload and latency.
+- **Ports** table with live rates and a trend line per port; click a row to chart that port.
+- **Bandwidth** chart (download as an area, upload as a line, peak marked, hover for values) with range buttons.
+- **Internet** (status, ISP, WAN IP, availability, latency, drops, last speed test) and **Health** (CPU, memory, temperatures, uptime, firmware, storage). Warnings, such as high temperature or an available update, show as a dot on the gateway.
+
+**Bandwidth history** (Options → *Bandwidth history*): how often the gateway is read (5–60 s, default 15), how long every reading is kept (1–24 h, default 2) and how long 1-minute averages are kept (1–7 days, default 1). The history is saved to disk every few minutes and when Home Assistant stops, so it survives restarts (turn this off to keep it in memory only). In the card's **View** menu, viewers choose which range buttons appear, bits/s or bytes/s, and whether the map's links show trend lines.
 
 ## Backup & restore
 

@@ -34,6 +34,13 @@ from .const import (
     DEFAULT_PANEL_TITLE,
     CONF_DISCOVERY_INTERVAL,
     CONF_MANUAL_DEVICES,
+    CONF_RATE_FINE_HOURS,
+    CONF_RATE_INTERVAL,
+    CONF_RATE_LONG_DAYS,
+    CONF_RATE_PERSIST,
+    DEFAULT_RATE_FINE_HOURS,
+    DEFAULT_RATE_INTERVAL,
+    DEFAULT_RATE_LONG_DAYS,
     CONF_UNIFI_ENABLED,
     CONF_UNIFI_HOST,
     CONF_UNIFI_PASSWORD,
@@ -486,7 +493,7 @@ class CirrusOptionsFlow(OptionsFlow):
     """Options: polling, tracked clients and switch SSH."""
 
     async def async_step_init(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
-        return self.async_show_menu(step_id="init", menu_options=["general", "clients", "manual", "ssh", "dns", "unifi"])
+        return self.async_show_menu(step_id="init", menu_options=["general", "clients", "manual", "ssh", "dns", "unifi", "bandwidth"])
 
     def _save(self, updates: dict[str, Any]) -> ConfigFlowResult:
         return self.async_create_entry(data={**self.config_entry.options, **updates})
@@ -679,6 +686,37 @@ class CirrusOptionsFlow(OptionsFlow):
             ),
             errors=errors,
             description_placeholders={"gateway": gateway or "your gateway"},
+        )
+
+    async def async_step_bandwidth(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+        opts = self.config_entry.options
+        if user_input is not None:
+            fine = int(user_input[CONF_RATE_FINE_HOURS])
+            days = int(user_input[CONF_RATE_LONG_DAYS])
+            return self._save(
+                {
+                    CONF_RATE_INTERVAL: int(user_input[CONF_RATE_INTERVAL]),
+                    CONF_RATE_FINE_HOURS: fine,
+                    CONF_RATE_LONG_DAYS: max(days, -(-fine // 24)),  # the long history covers the fine one
+                    CONF_RATE_PERSIST: bool(user_input.get(CONF_RATE_PERSIST)),
+                }
+            )
+        return self.async_show_form(
+            step_id="bandwidth",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(
+                        CONF_RATE_INTERVAL, default=opts.get(CONF_RATE_INTERVAL, DEFAULT_RATE_INTERVAL)
+                    ): NumberSelector(NumberSelectorConfig(min=5, max=60, step=5, unit_of_measurement="s")),
+                    vol.Required(
+                        CONF_RATE_FINE_HOURS, default=opts.get(CONF_RATE_FINE_HOURS, DEFAULT_RATE_FINE_HOURS)
+                    ): NumberSelector(NumberSelectorConfig(min=1, max=24, step=1, unit_of_measurement="h")),
+                    vol.Required(
+                        CONF_RATE_LONG_DAYS, default=opts.get(CONF_RATE_LONG_DAYS, DEFAULT_RATE_LONG_DAYS)
+                    ): NumberSelector(NumberSelectorConfig(min=1, max=7, step=1, unit_of_measurement="days")),
+                    vol.Required(CONF_RATE_PERSIST, default=opts.get(CONF_RATE_PERSIST, True)): BooleanSelector(),
+                }
+            ),
         )
 
     async def async_step_clients(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
