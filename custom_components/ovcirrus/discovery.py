@@ -24,7 +24,7 @@ PORTS: dict[int, tuple[str, bool, bool]] = {
     21: ("FTP", False, False), 22: ("SSH", False, False), 23: ("Telnet", False, False),
     25: ("SMTP", False, False), 53: ("DNS", False, False), 80: ("HTTP", False, True),
     111: ("RPC portmapper", False, False), 139: ("NetBIOS", False, False), 443: ("HTTPS", True, False),
-    445: ("SMB file sharing", False, False), 548: ("AFP file sharing", False, False),
+    445: ("SMB file sharing", False, False), 502: ("Modbus TCP", False, False), 548: ("AFP file sharing", False, False),
     554: ("RTSP video", False, False), 631: ("IPP printing", False, True), 853: ("DNS over TLS", False, False),
     1400: ("Sonos", False, True), 1883: ("MQTT", False, False), 2049: ("NFS", False, False),
     2375: ("Docker API", False, True), 3000: ("Web app (Grafana?)", False, True),
@@ -167,16 +167,20 @@ async def discover(host: str) -> dict:
 
 
 # ---------------------------------------------------------------- full TCP scan
-import shutil  # noqa: E402
-import xml.etree.ElementTree as ET  # noqa: E402
+import json  # noqa: E402
+import pathlib  # noqa: E402
 
-FULL_CONCURRENCY = 600
-FULL_TIMEOUT = 0.6
-NMAP_TIMEOUT = 900
+# Small embedded TCP stacks (heat pumps, inverters, PLCs) drop connections when flooded, so the
+# sweep is kept moderate and every well-known port is then re-checked slowly (see full_scan).
+FULL_CONCURRENCY = 200
+FULL_TIMEOUT = 1.0
+RECHECK_CONCURRENCY = 6
+RECHECK_TIMEOUT = 2.5
 
 # Extra well-known ports (beyond PORTS) used to name results of a full scan.
 WELL_KNOWN: dict[int, str] = {
-    20: "FTP data", 69: "TFTP", 88: "Kerberos", 110: "POP3", 119: "NNTP", 123: "NTP", 135: "MS RPC",
+    20: "FTP data", 69: "TFTP", 102: "Siemens S7", 1502: "Modbus TCP (alt)", 4840: "OPC UA",
+    20000: "DNP3", 44818: "EtherNet/IP", 88: "Kerberos", 110: "POP3", 119: "NNTP", 123: "NTP", 135: "MS RPC",
     143: "IMAP", 161: "SNMP", 389: "LDAP", 465: "SMTPS", 500: "IPsec IKE", 514: "Syslog", 515: "LPD printing",
     587: "SMTP submission", 636: "LDAPS", 873: "rsync", 993: "IMAPS", 995: "POP3S", 1080: "SOCKS proxy",
     1194: "OpenVPN", 1433: "MS SQL", 1521: "Oracle DB", 1723: "PPTP", 1900: "UPnP SSDP", 2222: "SSH (alt)",
@@ -191,77 +195,31 @@ WELL_KNOWN: dict[int, str] = {
 }
 
 
+# Every registered TCP port from IANA (built by scripts/update_ports.py). Our own names above win,
+# because IANA often lists the original owner of a port rather than what home labs run on it.
+IANA_FILE = pathlib.Path(__file__).with_name("iana_ports.json")
+_IANA: dict[int, str] | None = None
+
+
+def _load_iana() -> dict[int, str]:
+    global _IANA
+    if _IANA is None:
+        try:
+            _IANA = {int(k): v for k, v in json.loads(IANA_FILE.read_text(encoding="utf-8")).items()}
+        except (OSError, ValueError) as err:
+            _LOGGER.warning("Could not read the IANA port list (%s); unknown ports stay unnamed", err)
+            _IANA = {}
+    return _IANA
+
+
 def port_name(port: int) -> str | None:
     if port in PORTS:
         return PORTS[port][0]
-    return WELL_KNOWN.get(port)
-
-
-def nmap_available() -> bool:
-    return shutil.which("nmap") is not None
-
-
-def parse_nmap_xml(xml_text: str) -> list[dict]:
-    services: list[dict] = []
-    root = ET.fromstring(xml_text)
-    for port in root.iter("port"):
-        state = port.find("state")
-        if state is None or state.get("state") != "open" or port.get("protocol") != "tcp":
-            continue
-        num = int(port.get("portid"))
-        svc = port.find("service")
-        entry: dict = {"port": num}
-        name = svc.get("name") if svc is not None else None
-        product = " ".join(
-            x for x in ((svc.get("product") if svc is not None else None), (svc.get("version") if svc is not None else None)) if x
-        )
-        tunnel = svc.get("tunnel") if svc is not None else None
-        known = port_name(num)
-        if name and name not in ("unknown", "tcpwrapped"):
-            entry["service"] = known or name
-            entry["nmap_service"] = f"{tunnel}/{name}" if tunnel else name
-        elif known:
-            entry["service"] = known
-        if product:
-            entry["server"] = product[:100]
-        if svc is not None and svc.get("extrainfo"):
-            entry["banner"] = svc.get("extrainfo")[:100]
-        if (name or "").startswith("http") or tunnel == "ssl" and (name or "").startswith("http"):
-            scheme = "https" if tunnel == "ssl" or name == "https" else "http"
-            entry["url"] = f"{scheme}://{{host}}{'' if num in (80, 443) else f':{num}'}/"
-        entry["unknown"] = "service" not in entry
-        if entry["unknown"]:
-            entry["service"] = "Unknown service"
-        services.append(entry)
-    return services
-
-
-async def _nmap_scan(host: str) -> list[dict]:
-    proc = await asyncio.create_subprocess_exec(
-        "nmap", "-sT", "-Pn", "-p-", "-T4", "-sV", "--version-light", "--max-retries", "2", "-oX", "-", host,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-    )
-    try:
-        out, err = await asyncio.wait_for(proc.communicate(), NMAP_TIMEOUT)
-    except asyncio.TimeoutError:
-        proc.kill()
-        raise ScanError(f"nmap took longer than {NMAP_TIMEOUT // 60} minutes") from None
-    if proc.returncode != 0:
-        msg = err.decode(errors="replace").strip().splitlines()
-        raise ScanError(f"nmap stopped with code {proc.returncode}: {(msg[-1] if msg else 'no message')[:200]}")
-    try:
-        services = parse_nmap_xml(out.decode(errors="replace"))
-    except ET.ParseError as exc:
-        raise ScanError(f"nmap's output could not be read ({exc})") from None
-    for s in services:
-        if "url" in s:
-            s["url"] = s["url"].replace("{host}", host)
-    return services
+    return WELL_KNOWN.get(port) or (_IANA or {}).get(port)
 
 
 async def _connect_scan(host: str) -> list[int]:
-    """Plain TCP connect scan of 1-65535 (no nmap)."""
+    """Plain TCP connect scan of 1-65535."""
     sem = asyncio.Semaphore(FULL_CONCURRENCY)
     open_ports: list[int] = []
 
@@ -276,6 +234,24 @@ async def _connect_scan(host: str) -> list[int]:
 
     await asyncio.gather(*(one(p) for p in range(1, 65536)))
     return sorted(open_ports)
+
+
+async def _recheck_known(host: str, skip: set[int]) -> list[int]:
+    """Slow, gentle second look at well-known ports the fast sweep may have missed."""
+    sem = asyncio.Semaphore(RECHECK_CONCURRENCY)
+    found: list[int] = []
+
+    async def one(port: int) -> None:
+        async with sem:
+            try:
+                _, writer = await asyncio.wait_for(asyncio.open_connection(host, port), RECHECK_TIMEOUT)
+            except (OSError, asyncio.TimeoutError):
+                return
+            found.append(port)
+            writer.close()
+
+    await asyncio.gather(*(one(p) for p in sorted((set(PORTS) | set(WELL_KNOWN)) - skip)))
+    return found
 
 
 async def _identify_port(host: str, port: int, sem: asyncio.Semaphore) -> dict:
@@ -327,34 +303,27 @@ class ScanError(Exception):
 
 
 async def full_scan(host: str) -> dict:
-    """Every TCP port. Uses nmap (with version detection) when installed, else a connect scan.
-
-    If nmap fails, the built-in scanner runs instead and the result notes why nmap was not used.
-    """
+    """Every TCP port: a moderate connect sweep, a slow re-check of well-known ports, then naming."""
     started = time.time()
-    engine = "nmap" if nmap_available() else "built-in"
-    note = None
-    services: list[dict] = []
-    if engine == "nmap":
-        try:
-            services = await _nmap_scan(host)
-        except (ScanError, OSError) as err:
-            _LOGGER.warning("Full scan of %s: %s; using the built-in scanner instead", host, err)
-            note = f"nmap failed ({err}), so the built-in scanner was used."
-            engine = "built-in"
-    if engine == "built-in":
-        sem = asyncio.Semaphore(CONCURRENCY)
-        ports = await _connect_scan(host)
-        services = sorted(await asyncio.gather(*(_identify_port(host, p, sem) for p in ports)), key=lambda s: s["port"])
+    await asyncio.to_thread(_load_iana)
+    sem = asyncio.Semaphore(CONCURRENCY)
+    ports = await _connect_scan(host)
+    missed = await _recheck_known(host, set(ports))
+    if missed:
+        _LOGGER.info("Full scan of %s: slow re-check found %s the sweep missed", host, missed)
+    ports = sorted(set(ports) | set(missed))
+    services = sorted(await asyncio.gather(*(_identify_port(host, p, sem) for p in ports)), key=lambda s: s["port"])
     for s in services:
         s.setdefault("unknown", False)
+        p = s["port"]
+        if p not in PORTS and p not in WELL_KNOWN and s.get("service") == (_IANA or {}).get(p):
+            s["registry"] = True  # named only from the IANA list: a hint, renamable
     return {
         "ip": host,
         "ts": started,
         "duration": round(time.time() - started, 1),
         "mode": "full",
-        "engine": engine,
-        "note": note,
+        "engine": "built-in",
         "services": services,
         "role": guess_role(services),
         "os": guess_os(services),

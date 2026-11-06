@@ -590,7 +590,7 @@ class CirrusOptionsFlow(OptionsFlow):
                         SelectSelectorConfig(
                             options=[
                                 SelectOptionDict(value="quick", label="Quick: about 40 common service ports"),
-                                SelectOptionDict(value="full", label="Full: all 65,535 TCP ports (nmap if available)"),
+                                SelectOptionDict(value="full", label="Full: all 65,535 TCP ports"),
                             ],
                             mode=SelectSelectorMode.LIST,
                         )

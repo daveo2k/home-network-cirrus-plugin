@@ -32,7 +32,6 @@ async def async_get_config_entry_diagnostics(hass: HomeAssistant, entry) -> dict
             "known_devices": len(coordinator.store.known),
             "overrides": len(coordinator.store.overrides),
             "service_scans": list(coordinator.store.services),
-            "nmap_installed": hass.data.get("ovcirrus", {}).get("nmap"),
         },
         TO_REDACT,
     )

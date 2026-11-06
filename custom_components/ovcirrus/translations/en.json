@@ -247,11 +247,5 @@
         "server": "Specific DNS server(s)"
       }
     }
-  },
-  "issues": {
-    "nmap_missing": {
-      "title": "nmap is not installed",
-      "description": "A full port scan was requested, but nmap isn't available to Home Assistant, so full scans use the built-in scanner instead. That still finds every open TCP port, but it's slower and identifies fewer services.\n\nTo add nmap:\n- **Home Assistant OS / Supervised / Container:** nmap normally ships in the Home Assistant image. If it's missing, update Home Assistant; for a custom container, add `nmap` to the image (e.g. `apk add nmap`).\n- **Home Assistant Core (Python venv):** install it with the system package manager, e.g. `sudo apt install nmap`, then restart Home Assistant.\n\nThis notice clears itself once nmap is found."
-    }
   }
 }

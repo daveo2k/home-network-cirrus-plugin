@@ -123,25 +123,20 @@ automation:
 
 **From the map (admins):** click **+ Add device**. Enter a name, an IP and/or MAC, a type and, optionally, the switch and port. Without a port, the device is placed from the switch MAC table (or ARP / UniFi). Choose how to discover its services:
 
-- **Quick scan:** about 40 common service ports (SSH, HTTP/S, SMB, NFS, RDP, VNC, Proxmox, Synology, Plex, Jellyfin, Home Assistant, MQTT, databases, printers, RTSP…), with banners, page titles and TLS certificate names.
-- **Full scan:** all 65,535 TCP ports. It uses **nmap** with service and version detection when nmap is available to Home Assistant, otherwise a built-in TCP connect scan that then identifies each open port. It can take a few minutes.
+- **Quick scan:** about 40 common service ports (SSH, HTTP/S, SMB, NFS, RDP, VNC, Proxmox, Synology, Plex, Jellyfin, Home Assistant, MQTT, Modbus, databases, printers, RTSP…), with banners, page titles and TLS certificate names.
+- **Full scan:** all 65,535 TCP ports, followed by a slower re-check of well-known ports (small embedded devices such as heat pumps and inverters can drop connections during the fast pass). Each open port is then identified from its banner or web page, and named from the integration's own list or, failing that, the [IANA port registry](https://www.iana.org/assignments/service-names-port-numbers/) (tagged *IANA*, since the registered use is not always what runs there). It can take a few minutes. No external tools such as nmap are needed.
 
 Any wired device the map already shows (from the MAC table or LLDP) has **Add to map as a device** in its details, pre-filled with its name, IP, MAC and port. Added devices have **Edit device** / **Remove from map**, plus **Quick scan** / **Full scan** buttons.
 
 **Unknown ports:** open ports that nothing recognises are flagged *unknown*. Click **Name this port** to say what runs there, either for that device only or for that port on every device. Your names replace "Unknown service" in all future scans, and **rename** / **Clear name** change or remove them.
+
+The IANA list ships with the integration (`iana_ports.json`, about 6,000 TCP ports) and is refreshed with `python3 scripts/update_ports.py`.
 
 Devices can also be added under **Configure** → **Servers & manual devices**. Scans repeat every 24 h by default (**Configure** → **General**). Only private / link-local addresses can be scanned, and some intrusion-detection systems will notice a scan.
 
 ### Your own pictures
 
 Admins can give any client or manual device its own picture: open it on the map and click **Add picture** (PNG, JPEG or WebP, e.g. a photo of the actual Shelly relay). The browser shrinks it to 480 px before upload. It replaces the icon on the map and shows in the device's details. Pictures are stored in `/config/ovcirrus_photos`, belong to the device's MAC address (so they follow it between Wi-Fi and cable) and are included in backups.
-
-### Installing nmap
-
-Full scans use nmap when Home Assistant can find it. The integration does not install system packages itself, because Home Assistant's container is replaced on every update. If a full scan is requested and nmap is missing, a notice appears under **Settings → Repairs**, and the scan uses the built-in scanner instead.
-
-- **Home Assistant OS / Supervised / Container:** nmap normally ships in the Home Assistant image. If it is missing, update Home Assistant. For a custom container image, add `nmap` (e.g. `apk add nmap`).
-- **Home Assistant Core (Python venv):** `sudo apt install nmap` (or your distro's equivalent), then restart Home Assistant.
 
 ## Speed test & WAN
 

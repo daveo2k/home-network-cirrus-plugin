@@ -239,7 +239,6 @@ def ws_topology(hass: HomeAssistant, connection: websocket_api.ActiveConnection,
         {
             "entries": result,
             "is_admin": bool(connection.user and connection.user.is_admin),
-            "nmap": bool(hass.data.get(DOMAIN, {}).get("nmap")),
             "version": VERSION,
             "view": next((dict(e.runtime_data.store.view) for e in hass.config_entries.async_entries(DOMAIN)
                           if e.state is ConfigEntryState.LOADED and e.runtime_data.store.view), {}),

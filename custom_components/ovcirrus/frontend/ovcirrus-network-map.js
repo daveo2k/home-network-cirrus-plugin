@@ -750,7 +750,6 @@ class OvCirrusNetworkMap extends HTMLElement {
       this._isAdmin = !!res.is_admin;
       this._integrationVersion = res.version || null;
       this._applyServerView(res.view || {});
-      this._nmap = !!res.nmap;
       const cur = this._sites[this._siteIdx];
       if (cur && this._localOffsets) {
         // Drop local edits the server has confirmed.
@@ -1335,7 +1334,7 @@ class OvCirrusNetworkMap extends HTMLElement {
       const label = x.url ? `<a href="${esc(x.url)}" target="_blank" rel="noopener noreferrer">${esc(x.service)}</a>` : esc(x.service);
       const naming = this._labeling && this._labeling.ip === sel.ip && this._labeling.port === x.port;
       const nameBtn =
-        this._isAdmin && (x.unknown || x.labelled)
+        this._isAdmin && (x.unknown || x.labelled || x.registry)
           ? `<button class="linkbtn" data-nameport="${x.port}">${x.labelled ? "rename" : "Name this port"}</button>`
           : "";
       const form = naming
@@ -1344,14 +1343,14 @@ class OvCirrusNetworkMap extends HTMLElement {
              <div class="row"><button class="act" type="submit">Save</button><button class="act ghost" type="button" data-portcancel>Cancel</button>
              ${x.labelled ? `<button class="act ghost" type="button" data-portclear="${x.port}">Clear name</button>` : ""}</div></form>`
         : "";
-      const tag = x.unknown ? `<span class="tag unk">unknown</span>` : x.labelled ? `<span class="tag">${x.label_scope === "all" ? "your name · all devices" : "your name"}</span>` : "";
+      const tag = x.unknown ? `<span class="tag unk">unknown</span>` : x.labelled ? `<span class="tag">${x.label_scope === "all" ? "your name · all devices" : "your name"}</span>` : x.registry ? `<span class="tag" title="Named from the IANA port registry: the registered use, which may not be what runs here">IANA</span>` : "";
       return `<tr class="${x.unknown ? "unk" : ""}"><td>${x.port}</td><td>${label} ${tag}${extra ? `<div class="muted">${esc(extra)}</div>` : ""}${nameBtn}${form}</td></tr>`;
     };
     const unknownCount = (svc?.services || []).filter((x) => x.unknown).length;
     const servicesBlock =
       sel && (svc || canScan)
         ? `<div class="section"><div class="sublabel">Services${
-            svc?.ts ? ` · ${svc.mode === "full" ? "full scan" : "quick scan"}${svc.engine === "nmap" ? " (nmap)" : ""} · ${esc(ago(svc.ts))}` : ""
+            svc?.ts ? ` · ${svc.mode === "full" ? "full scan" : "quick scan"} · ${esc(ago(svc.ts))}` : ""
           }</div>
             ${svc?.note ? `<div class="muted">${esc(svc.note)}</div>` : ""}
             ${svc?.role || svc?.os ? `<div class="role">${esc([svc.role, svc.os].filter(Boolean).join(" · "))}</div>` : ""}
@@ -1369,14 +1368,10 @@ class OvCirrusNetworkMap extends HTMLElement {
                     scanning
                       ? `<button class="act" disabled>${scanning === "full" ? "Scanning all 65,535 ports… (can take a few minutes)" : "Scanning…"}</button>`
                       : `<button class="act" data-scan="quick" data-ip="${esc(sel.ip)}" title="About 40 common service ports">Quick scan</button>
-                         <button class="act ghost" data-scan="full" data-ip="${esc(sel.ip)}" title="Every TCP port, with nmap service detection when available">Full scan (all ports)</button>`
+                         <button class="act ghost" data-scan="full" data-ip="${esc(sel.ip)}" title="Every TCP port, then a slower re-check of well-known ones">Full scan (all ports)</button>`
                   }</div>${
                     this._scanErr?.ip === sel.ip ? `<div class="muted err">${esc(this._scanErr.text)}</div>` : ""
-                  }<div class="muted">${
-                    this._nmap
-                      ? "Full scans use nmap with service detection."
-                      : "nmap isn't installed in Home Assistant, so full scans use the built-in scanner (slower, less detail). See Settings → Repairs for how to add it."
-                  }</div>`
+                  }<div class="muted">Full scans check every TCP port and name them from the IANA port registry.</div>`
                 : ""
             }
           </div>`
