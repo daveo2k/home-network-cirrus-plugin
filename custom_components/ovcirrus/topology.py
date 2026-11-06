@@ -135,6 +135,7 @@ class MapExtras:
     manual: list[dict] = field(default_factory=list)  # user-added devices
     services: dict[str, dict] = field(default_factory=dict)  # IP -> discovery result
     wan: dict | None = None  # UniFi WAN / speed test summary
+    gateway: dict | None = None  # UniFi gateway live ports / internet / health (unifi.parse_gateway)
     port_layouts: dict[str, dict] = field(default_factory=dict)  # model slug -> NetBox port counts
     entry_id: str | None = None
     unifi_ips: dict[str, str] = field(default_factory=dict)  # MAC -> IP from the gateway
@@ -142,6 +143,13 @@ class MapExtras:
     vlans: dict[str, dict] = field(default_factory=dict)  # VLAN id -> {"name", "up"}
     radios: dict[str, list] = field(default_factory=dict)  # AP MAC -> radio dicts from rf-details
     rf_profiles: dict[str, str] = field(default_factory=dict)  # AP MAC -> RF profile name
+
+
+# UniFi model codes -> the names on the box
+UNIFI_MODELS = {
+    "UDRULT": "UCG Ultra", "UCGMAX": "UCG Max", "UCGF": "UCG Fiber", "UDMPRO": "UDM Pro", "UDMPROSE": "UDM SE",
+    "UDM": "UniFi Dream Machine", "UDR": "UniFi Dream Router", "UXG": "UniFi Next-Gen Gateway", "UXGPRO": "UXG Pro",
+}
 
 
 def radio_text(r: dict) -> str:
@@ -505,6 +513,13 @@ def build_site_map(
             gw["version"] = gw.get("version") or wan.get("gateway_version")
             gw["name"] = gw["name"] or wan.get("gateway_name") or ""
             gw["wan"] = wan
+    ugw = extras.gateway or None
+    if ugw:
+        gws = [n for n in nodes.values() if n["kind"] == "gateway"]
+        gw = next((n for n in gws if n.get("mac") and n.get("mac") == ugw.get("mac")), gws[0] if len(gws) == 1 else None)
+        if gw:
+            gw["unifi"] = ugw
+            gw["model"] = gw.get("model") or ugw.get("model")
 
     adjacency: dict[str, list[str]] = defaultdict(list)
     for pair in links:
@@ -541,6 +556,8 @@ def build_site_map(
                 sw_side = m["a"]
                 v = port_vlan(sw_side, m["a_port"], m["lag"])
                 far = m["b_port"] or re.sub(r"^Alcatel-Lucent Enterprise\s+", "", m["b_desc"] or "")
+                other = nodes.get(nxt if sw_side == cur else cur) or {}
+                peer = next((p for p in (other.get("unifi") or {}).get("ports") or [] if far and p.get("ifname") == far), None)
                 members.append({
                     "label": " ↔ ".join(x for x in (m["a_port"], far) if x),
                     "port": m["a_port"],
@@ -550,6 +567,8 @@ def build_site_map(
                     "untagged": (v or {}).get("untagged", []),
                     "tagged": (v or {}).get("tagged", []),
                     "lag": m["lag"],
+                    # the gateway's end of this cable, with live traffic (UniFi): rx = into the gateway
+                    "peer": {k: peer.get(k) for k in ("ifname", "name", "up", "speed", "rx", "tx")} if peer else None,
                 })
             vlan_ids = sorted({i for m in members for i in m["untagged"] + m["tagged"]})
             edge[nxt] = {
@@ -858,10 +877,37 @@ def build_site_map(
             graphic = ap_graphic(node.get("model"))
         elif node["kind"] == "gateway":
             graphic = {"type": "gateway"}
+            ugw_node = node.get("unifi")
+            if ugw_node:
+                graphic = {"type": "gateway", "ports": ugw_node.get("ports") or [], "model": UNIFI_MODELS.get(ugw_node.get("model") or "", ugw_node.get("model"))}
+                h = ugw_node.get("health") or {}
+                ups = [p for p in ugw_node.get("ports") or [] if p.get("up")]
+                details.insert(1, ("Ports up", f"{len(ups)} of {len(ugw_node.get('ports') or [])}"))
+                code = node.get("model") or ugw_node.get("model")
+                if code in UNIFI_MODELS:
+                    details = [(k, f"{UNIFI_MODELS[code]} ({code})" if k == "Model" else v) for k, v in details]
+                if not node.get("uptime") and h.get("uptime"):
+                    details.insert(2, ("Uptime", _duration(h["uptime"])))
         image = (images or {}).get(model_slug(node.get("model")))
         if image:
             graphic = {**(graphic or {"type": node["kind"]}), "image": image}
+        ugw_card = node.get("unifi") if node["kind"] == "gateway" else None
+        link = edge.get(key)
+        alert = None
+        if ugw_card:
+            levels = [a["level"] for a in ugw_card.get("alerts") or []]
+            alert = "error" if "error" in levels else "warning" if "warning" in levels else None
+            inet = ugw_card.get("internet") or {}
+            if not link and inet.get("port"):
+                # the Internet -> gateway line: the WAN port and its live traffic
+                link = {"label": f"WAN {inet['port']}", "status": "up" if (inet.get("status") or "ok") == "ok" else "down",
+                        "rate": {"rx": inet.get("rx"), "tx": inet.get("tx"), "speed": inet.get("link_speed"), "wan": True, "port": inet["port"]},
+                        "latency": inet.get("latency")}
+        if node["kind"] == "gateway" and node.get("model") in UNIFI_MODELS:
+            sub = [node.get("ip") or "", UNIFI_MODELS[node["model"]]]
         return {
+            "unifi": {k: ugw_card.get(k) for k in ("health", "internet", "alerts", "ports")} if ugw_card else None,
+            "alert": alert,
             "id": key,
             "kind": node["kind"],
             "name": name,
@@ -873,7 +919,7 @@ def build_site_map(
             "mac": node.get("mac"),
             "ip": node.get("ip"),
             "services": extras.services.get(node.get("ip") or "") if node["kind"] in ("endpoint", "bridge") else None,
-            "link": edge.get(key),
+            "link": link,
             "details": [[k, str(v)] for k, v in details if v not in (None, "")],
             "groups": groups,
         }
@@ -895,6 +941,27 @@ def build_site_map(
         internet["status"] = {"ok": "online", "error": "offline"}.get(state, internet["status"])
         internet["subtitle"] = wan.get("isp") or ""
         internet["wan"] = wan
+    ugw_inet = (extras.gateway or {}).get("internet") or {}
+    if ugw_inet:
+        state = (ugw_inet.get("status") or "").lower()
+        internet["status"] = {"ok": "online", "error": "offline"}.get(state, internet["status"])
+        st = ugw_inet.get("speedtest") or {}
+        speed = f"{round(st['down'])}/{round(st['up'])} Mbps" if st.get("down") and st.get("up") else ""
+        internet["subtitle"] = " · ".join(x for x in (ugw_inet.get("isp"), speed) if x)
+        internet["internet"] = ugw_inet
+        mon = " · ".join(f"{m['target']} {m['latency']} ms" for m in ugw_inet.get("monitors") or [] if m.get("latency") is not None)
+        internet["details"] = [[k, str(v)] for k, v in (
+            ("Status", ugw_inet.get("status")),
+            ("ISP", ugw_inet.get("isp")),
+            ("WAN IP", ugw_inet.get("wan_ip")),
+            ("Availability", f"{ugw_inet['availability']:g}%" if ugw_inet.get("availability") is not None else None),
+            ("Latency", f"{ugw_inet['latency']:g} ms" if ugw_inet.get("latency") is not None else None),
+            ("Monitors", mon or None),
+            ("Dropped", ugw_inet.get("drops")),
+            ("Connected for", _duration(ugw_inet["uptime"]) if ugw_inet.get("uptime") else None),
+            ("Speed test server", (ugw_inet.get("speedtest") or {}).get("server")),
+            ("Source", "UniFi gateway"),
+        ) if v not in (None, "")]
         internet["details"] = [[k, str(v)] for k, v in (
             ("WAN status", wan.get("status")),
             ("Internet", wan.get("internet")),

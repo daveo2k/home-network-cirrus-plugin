@@ -13,10 +13,12 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .api import CirrusApiError, CirrusAuthError, CirrusClient
 from .assets import AssetCache
+from .history import RateHistory
 from .const import (
     CONF_DISCOVERY_INTERVAL,
     CONF_DNS_MODE,
@@ -169,6 +171,34 @@ class CirrusCoordinator(DataUpdateCoordinator[CirrusData]):
             else None
         )
 
+        self.rates = RateHistory()
+        self._rates_unsub = None
+        self._rates_busy = False
+
+    RATE_INTERVAL = timedelta(seconds=15)
+
+    def start_rate_history(self) -> None:
+        """Read the gateway's port rates every 15 s into the in-memory history (UniFi only)."""
+        if self.unifi and not self._rates_unsub:
+            self._rates_unsub = async_track_time_interval(self.hass, self._poll_rates, self.RATE_INTERVAL)
+
+    async def _poll_rates(self, _now=None) -> None:
+        if self._rates_busy or not self.unifi:
+            return
+        self._rates_busy = True
+        try:
+            ports = await self.unifi.gateway_ports()
+        except UnifiError as err:
+            _LOGGER.debug("UniFi rate poll failed: %s", err)
+            return
+        finally:
+            self._rates_busy = False
+        for p in ports:
+            key = p.get("ifname") or str(p.get("idx"))
+            self.rates.names[key] = {"name": p.get("name"), "role": p.get("role"), "speed": p.get("speed"), "up": p.get("up")}
+            if p.get("up"):
+                self.rates.add(key, p.get("rx"), p.get("tx"))
+
     @property
     def site_ids(self) -> list[str]:
         return list(self.config_entry.data.get(CONF_SITE_IDS) or [])
@@ -195,6 +225,9 @@ class CirrusCoordinator(DataUpdateCoordinator[CirrusData]):
         return view
 
     async def async_shutdown(self) -> None:
+        if self._rates_unsub:
+            self._rates_unsub()
+            self._rates_unsub = None
         await super().async_shutdown()
         if self.unifi:
             await self.unifi.close()
@@ -363,6 +396,7 @@ class CirrusCoordinator(DataUpdateCoordinator[CirrusData]):
             return
         data.unifi = {
             "wan": snap["wan"],
+            "gateway": snap.get("gateway"),
             "clients": {
                 norm_mac(c.get("mac")): c for c in snap["clients"] if norm_mac(c.get("mac"))
             },
@@ -494,6 +528,7 @@ class CirrusCoordinator(DataUpdateCoordinator[CirrusData]):
             manual=self.manual_devices,
             services=self.services_view(),
             wan=(data.unifi.get("wan") or None),
+            gateway=(data.unifi.get("gateway") or None),
             port_layouts=layouts,
             port_vlans=data.port_vlans,
             vlans=data.vlans,

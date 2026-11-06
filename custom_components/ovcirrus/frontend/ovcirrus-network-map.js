@@ -86,44 +86,45 @@ const portState = (g, n) => {
 };
 
 function switchSvg(g) {
-  const PW = 10, PH = 8, GX = 2, BLOCK = 6, LEFT = 62;
+  // Drawn at about 1 unit = 1px in the wide switch panel, so the port numbers read at their CSS size (10px).
+  // Odd ports sit on the top row with their number above, even ports below with the number underneath.
+  const PW = 19, PH = 14, GX = 3, BLOCK = 6, LEFT = 10, BG = 10;
   const cols = Math.ceil(g.copper / 2);
-  const blockGap = (c) => Math.floor(c / BLOCK) * 5;
-  const copperW = cols ? cols * (PW + GX) + blockGap(cols - 1) : 0;
+  const blockGap = (c) => Math.floor(c / BLOCK) * BG;
+  const copperW = cols ? cols * (PW + GX) - GX + blockGap(cols - 1) : 0;
   const sfpCols = Math.ceil(g.sfp / 2);
   const stackCols = Math.ceil(g.stack / 2);
-  const sfpX = LEFT + copperW + 10;
-  const stackX = sfpX + sfpCols * 17 + (sfpCols ? 8 : 0);
-  const W = stackX + stackCols * 21 + 8;
-  const H = 46;
-  const rowY = [13, 27];
+  const SW = 21, QW = 26;
+  const sfpX = LEFT + copperW + (copperW ? 14 : 0);
+  const stackX = sfpX + (sfpCols ? sfpCols * (SW + 3) - 3 + 12 : 0);
+  const W = Math.max(stackX + (stackCols ? stackCols * (QW + 3) - 3 : 0) + LEFT, 180);
+  const rowY = [48, 70];
+  const H = 106;
   const parts = [];
   const port = (n, x, row, w, kind) => {
     const { cls, p } = portState(g, n);
     const y = rowY[row];
-    const ledY = row === 0 ? y - 4 : y + PH + 2;
+    const ledY = row === 0 ? y - 6 : y + PH + 3;
+    const numY = row === 0 ? y - 10 : y + PH + 17;
     const vl = p ? [p.u?.length ? `untagged ${p.u.join(", ")}` : "", p.t?.length ? `tagged ${p.t.join(", ")}` : ""].filter(Boolean).join(" · ") : "";
     const tip = `1/1/${n} · ${p ? (p.admin ? (p.up ? "up" : "down") : "disabled") : "no data"}${p?.label ? " · " + p.label : ""}${vl ? " · VLAN " + vl : ""}`;
     const inVlan = p && VLAN_SELECTED !== null && carries({ untagged: p.u, tagged: p.t }, VLAN_SELECTED);
     parts.push(`<g class="port ${p?.label ? "linked" : ""} ${inVlan ? "invlan" : ""}" ${inVlan ? `style="--c:${vlanColor(VLAN_SELECTED)}"` : ""}><title>${esc(tip)}</title>
-      <rect class="jack ${kind}" x="${x}" y="${y}" width="${w}" height="${PH}" rx="1"/>
-      <rect class="led ${cls}" x="${x + w / 2 - 2}" y="${ledY}" width="4" height="2" rx="1"/></g>`);
+      <text class="sw-pn ${cls}" x="${x + w / 2}" y="${numY}">${n}</text>
+      <rect class="jack ${kind}" x="${x}" y="${y}" width="${w}" height="${PH}" rx="1.5"/>
+      <rect class="led ${cls}" x="${x + w / 2 - 4}" y="${ledY}" width="8" height="3" rx="1.2"/></g>`);
   };
   for (let n = 1; n <= g.copper; n++) {
     const c = Math.floor((n - 1) / 2);
     port(n, LEFT + c * (PW + GX) + blockGap(c), (n - 1) % 2, PW, "rj45");
   }
-  for (let k = 0; k < g.sfp; k++) port(g.copper + 1 + k, sfpX + Math.floor(k / 2) * 17, k % 2, 14, "sfp");
-  for (let k = 0; k < g.stack; k++) port(g.copper + g.sfp + 1 + k, stackX + Math.floor(k / 2) * 21, k % 2, 18, "qsfp");
-  return `<svg class="dev switch" viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(g.model || "Switch")} front panel">
-    <rect class="sw-body" x="0.5" y="0.5" width="${W - 1}" height="${H - 1}" rx="3"/>
-    <rect class="sw-ear" x="0.5" y="0.5" width="6" height="${H - 1}" rx="2"/>
-    <rect class="sw-ear" x="${W - 6.5}" y="0.5" width="6" height="${H - 1}" rx="2"/>
-    <text class="sw-model" x="11" y="15">${esc((g.model || "").replace(/^OS/, "OS "))}</text>
-    ${g.poe ? `<text class="sw-poe" x="11" y="25">PoE+</text>` : ""}
-    <rect class="jack rj45" x="11" y="31" width="9" height="7" rx="1"/>
-    <circle class="led-dot" cx="27" cy="34.5" r="2"/>
-    <circle class="led-dot" cx="34" cy="34.5" r="2"/>
+  for (let k = 0; k < g.sfp; k++) port(g.copper + 1 + k, sfpX + Math.floor(k / 2) * (SW + 3), k % 2, SW, "sfp");
+  for (let k = 0; k < g.stack; k++) port(g.copper + g.sfp + 1 + k, stackX + Math.floor(k / 2) * (QW + 3), k % 2, QW, "qsfp");
+  const model = esc((g.model || "").replace(/^OS/, "OS "));
+  return `<svg class="dev switch" viewBox="0 0 ${W} ${H}" style="max-width:${W}px" role="img" aria-label="${esc(g.model || "Switch")} front panel">
+    <rect class="sw-body" x="0.5" y="0.5" width="${W - 1}" height="${H - 1}" rx="5"/>
+    <circle class="led-dot" cx="${LEFT + 4}" cy="14" r="3"/>
+    <text class="sw-title" x="${LEFT + 13}" y="18">${model}${g.poe ? `<tspan class="sw-poe2" dx="8">PoE+</tspan>` : ""}</text>
     ${parts.join("")}</svg>`;
 }
 
@@ -165,11 +166,173 @@ function apSvg(g, status, mini) {
   return `<svg class="${mini ? "mini" : "dev ap"}" viewBox="0 0 100 ${mini ? 100 : 104}" role="img" aria-label="${esc(g.model || "Access point")}">${body}${label}</svg>`;
 }
 
-function gatewaySvg(status, mini) {
-  return `<svg class="${mini ? "mini" : "dev gw"}" viewBox="0 0 100 60" role="img" aria-label="Gateway">
+// ---------- live traffic (UniFi gateway ports): bytes/s in, bits/s out ----------
+function fmtRate(bytes) {
+  const b = num(bytes);
+  if (b === null) return "";
+  const bits = b * 8;
+  if (bits < 1000) return `${Math.round(bits)} b/s`;
+  if (bits < 1e6) return `${Math.round(bits / 1000)} kb/s`;
+  if (bits < 1e9) return `${(bits / 1e6).toFixed(bits < 1e7 ? 1 : 0)} Mb/s`;
+  return `${(bits / 1e9).toFixed(2)} Gb/s`;
+}
+// how busy a link is: share of the link speed (Mbps) used in the busier direction
+function linkLoad(rx, tx, speed) {
+  const sp = num(speed);
+  if (!sp) return "";
+  const u = (Math.max(num(rx) || 0, num(tx) || 0) * 8) / (sp * 1e6);
+  return u >= 0.8 ? "high" : u >= 0.5 ? "warn" : "";
+}
+// Text after a link label for the gateway's end of a cable: its port name and live traffic, seen from the
+// device further from the Internet: ↓ = gateway sending to it, ↑ = gateway receiving from it.
+function peerText(peer) {
+  if (!peer) return "";
+  const rate = peer.up ? `↓${fmtRate(peer.tx)} ↑${fmtRate(peer.rx)}` : "down";
+  return `${peer.name || peer.ifname} ${rate}`;
+}
+function peerHtml(peer) {
+  if (!peer) return "";
+  const load = peer.up ? linkLoad(peer.rx, peer.tx, peer.speed) : "down";
+  const tip = `Gateway port ${peer.ifname}${peer.name ? " (" + peer.name + ")" : ""}: ${peer.up ? `${peer.speed ? peer.speed + " Mbps, " : ""}sending ${fmtRate(peer.tx)}, receiving ${fmtRate(peer.rx)}` : "down"}`;
+  return ` <span class="peer" title="${esc(tip)}">${esc(peer.name || peer.ifname)}</span> <span class="rate ${load}" title="${esc(tip)}">${peer.up ? `↓${esc(fmtRate(peer.tx))} ↑${esc(fmtRate(peer.rx))}` : "down"}</span>${
+    LINK_GRAPHS ? `<span class="lspark" data-port="${esc(peer.ifname)}">${sparkSvg(ratePoints("30m", peer.ifname))}</span>` : ""
+  }`;
+}
+// The Internet -> gateway line: the WAN port's download / upload and latency.
+function wanText(link) {
+  const r = link?.rate;
+  if (!r) return "";
+  return `↓${fmtRate(r.rx)} ↑${fmtRate(r.tx)}${num(link.latency) !== null ? ` · ${Math.round(link.latency)} ms` : ""}`;
+}
+
+// ---------- bandwidth history (gateway ports) ----------
+let RATES = {}; // range -> ovcirrus/rates result
+let LINK_GRAPHS = false; // small traffic trend on the map's link labels
+const LINK_GRAPHS_KEY = "ovcirrus-link-graphs";
+const SPARK_W = 44, SPARK_H = 12;
+// [[t, down, up]] in bytes/s; ↓ is towards the device further from the Internet (WAN: into the gateway)
+function ratePoints(range, port) {
+  const d = RATES[range];
+  const pts = d?.series?.[port] || [];
+  const wan = d?.ports?.[port]?.role === "wan";
+  return pts.map(([t, rx, tx]) => (wan ? [t, rx, tx] : [t, tx, rx]));
+}
+function sparkSvg(pts, w = SPARK_W, h = SPARK_H) {
+  if (pts.length < 2) return `<svg class="spark" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}"><line class="spark-base" x1="0" x2="${w}" y1="${h - 0.5}" y2="${h - 0.5}"/></svg>`;
+  const t0 = pts[0][0], t1 = pts[pts.length - 1][0] || t0 + 1;
+  const max = Math.max(1, ...pts.map((p) => p[1]));
+  const xy = pts.map((p) => [((p[0] - t0) / (t1 - t0 || 1)) * w, h - 1 - (p[1] / max) * (h - 2)]);
+  const line = xy.map(([x, y], i) => `${i ? "L" : "M"}${x.toFixed(1)},${y.toFixed(1)}`).join("");
+  return `<svg class="spark" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" aria-hidden="true"><path class="spark-area" d="${line}L${w},${h}L0,${h}Z"/><path class="spark-line" d="${line}"/></svg>`;
+}
+function niceMax(v) {
+  if (v <= 0) return 1;
+  const e = Math.pow(10, Math.floor(Math.log10(v)));
+  for (const m of [1, 2, 2.5, 5, 10]) if (v <= m * e) return m * e;
+  return 10 * e;
+}
+const hhmm = (t) => {
+  const d = new Date(t * 1000);
+  return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+};
+// Area (↓) + line (↑) chart of one port, Mbit/s (kbit/s when small) against time, with the peak marked.
+function bandwidthChart(pts, range, dnLabel, upLabel) {
+  const W = 420, H = 206, L = 40, R = 12, T = 24, B = 24;
+  if (pts.length < 2)
+    return `<div class="uchart-empty">Collecting traffic… the graph fills in as readings arrive (every 15 s).</div>`;
+  const span = { "30m": 1800, "2h": 7200, "24h": 86400 }[range] || 7200;
+  const t1 = pts[pts.length - 1][0], t0 = t1 - span;
+  const peakBits = Math.max(...pts.map((p) => Math.max(p[1], p[2]))) * 8;
+  const unit = peakBits >= 1e6 ? ["Mbit/s", 1e6] : ["kbit/s", 1e3];
+  const val = (b) => (b * 8) / unit[1];
+  const top = Math.max(...pts.map((p) => Math.max(val(p[1]), val(p[2])))) * 1.05 || 1;
+  const step = niceMax(top / 4);
+  const ymax = Math.ceil(top / step) * step;
+  const X = (t) => L + ((t - t0) / span) * (W - L - R);
+  const Y = (v) => T + (1 - v / ymax) * (H - T - B);
+  const fmt = (v) => (v >= 100 ? Math.round(v) : v >= 10 ? +v.toFixed(1) : +v.toFixed(v >= 1 ? 1 : 2));
+  const yt = [];
+  for (let v = 0; v <= ymax + step / 2; v += step) yt.push(v);
+  const xstep = { "30m": 300, "2h": 1800, "24h": 10800 }[range] || 1800;
+  const xt = [];
+  for (let t = Math.ceil(t0 / xstep) * xstep; t <= t1; t += xstep) xt.push(t);
+  const path = (k) => pts.map((p, i) => `${i ? "L" : "M"}${X(p[0]).toFixed(1)},${Y(val(p[k])).toFixed(1)}`).join("");
+  const dn = path(1), up = path(2);
+  const baseY = Y(0).toFixed(1);
+  const peak = pts.reduce((a, p) => (p[1] > a[1] ? p : a), pts[0]);
+  const px = X(peak[0]), py = Y(val(peak[1]));
+  const peakLabel = `Max ${fmt(val(peak[1]))} ${unit[0]}`;
+  const lx = Math.min(Math.max(px + 6, L + 2), W - R - peakLabel.length * 5.6);
+  return `<svg class="uchart" viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(dnLabel)} and ${esc(upLabel)} over ${esc(range)}" data-t0="${t0}" data-span="${span}" data-l="${L}" data-r="${R}" data-w="${W}" data-t="${T}" data-b="${B}" data-h="${H}" data-ymax="${ymax}" data-unit="${unit[1]}" data-uname="${unit[0]}">
+    ${yt.map((v) => `<line class="grid" x1="${L}" x2="${W - R}" y1="${Y(v).toFixed(1)}" y2="${Y(v).toFixed(1)}"/><text class="ytick" x="${L - 5}" y="${(Y(v) + 3).toFixed(1)}">${fmt(v)}</text>`).join("")}
+    ${xt.map((t) => `<line class="grid v" x1="${X(t).toFixed(1)}" x2="${X(t).toFixed(1)}" y1="${T}" y2="${H - B}"/><text class="xtick" x="${X(t).toFixed(1)}" y="${H - 8}">${hhmm(t)}</text>`).join("")}
+    <text class="yunit" x="4" y="10">${unit[0]}</text>
+    <path class="area dn" d="${dn}L${X(pts[pts.length - 1][0]).toFixed(1)},${baseY}L${X(pts[0][0]).toFixed(1)},${baseY}Z"/>
+    <path class="line dn" d="${dn}"/><path class="line up" d="${up}"/>
+    <circle class="peak" cx="${px.toFixed(1)}" cy="${py.toFixed(1)}" r="4"/>
+    <text class="peaklabel" x="${lx.toFixed(1)}" y="${Math.max(T + 8, py - 6).toFixed(1)}">${esc(peakLabel)}</text>
+    <g class="hover" visibility="hidden"><line class="cross" y1="${T}" y2="${H - B}"/><circle class="hdot dn" r="4"/><circle class="hdot up" r="4"/></g>
+    <rect class="hit" x="${L}" y="${T}" width="${W - L - R}" height="${H - T - B}"/>
+  </svg>`;
+}
+
+function gatewaySvg(status, mini, g) {
+  const ports = g?.ports?.length ? g.ports : null;
+  if (mini || !ports) {
+    const n = ports ? ports.length : 4;
+    const w = Math.min(11, 48 / n);
+    return `<svg class="${mini ? "mini" : "dev gw"}" viewBox="0 0 100 60" role="img" aria-label="Gateway">
     <rect class="sw-body" x="4" y="14" width="92" height="32" rx="6"/>
-    ${[0, 1, 2, 3].map((i) => `<rect class="jack rj45" x="${46 + i * 11}" y="25" width="8" height="9" rx="1"/>`).join("")}
+    ${Array.from({ length: n }, (_, i) => {
+      const p = ports?.[i];
+      return `<rect class="jack rj45${p?.role === "wan" ? " wan" : ""}" x="${44 + i * w}" y="25" width="${w - 2.5}" height="9" rx="1"/>${
+        p ? `<rect class="led ${p.up ? "up" : "down"}" x="${44 + i * w + (w - 2.5) / 2 - 1.5}" y="36" width="3" height="2" rx=".8"/>` : ""
+      }`;
+    }).join("")}
     <circle class="led-status ${esc(status)}" cx="18" cy="30" r="${mini ? 6 : 3.5}"/></svg>`;
+  }
+  // Front panel: one tile per port with its LED, name and speed; the WAN port is marked. The viewBox is
+  // about the panel's own width so the text draws at roughly its CSS size (13px / 12px).
+  const GAP = 6, PAD = 8, CH = 7.3; // CH: width of a 12px monospace character
+  const TW = Math.max(58, (430 - 2 * PAD - (ports.length - 1) * GAP) / ports.length);
+  const W = 2 * PAD + ports.length * TW + (ports.length - 1) * GAP;
+  const per = Math.max(4, Math.floor((TW - 4) / CH));
+  const wrap = (name) => {
+    const lines = [];
+    let cur = "";
+    for (const word of String(name || "").split(/\s+/).filter(Boolean)) {
+      const next = cur ? `${cur} ${word}` : word;
+      if (next.length <= per || !cur) cur = next;
+      else { lines.push(cur); cur = word; }
+    }
+    if (cur) lines.push(cur);
+    const out = lines.slice(0, 2).map((l) => (l.length > per ? l.slice(0, per - 1) + "…" : l));
+    if (lines.length > 2) out[1] = out[1].slice(0, per - 1) + "…";
+    return out;
+  };
+  const named = ports.map((p) => wrap(p.name));
+  const rows = Math.max(1, ...named.map((l) => l.length));
+  const TOP = 30, JH = 22, H = TOP + JH + 22 + rows * 15 + 18;
+  const tiles = ports
+    .map((p, i) => {
+      const x = PAD + i * (TW + GAP), cx = x + TW / 2;
+      const sp = p.up ? (p.speed >= 1000 ? `${p.speed / 1000}G` : `${p.speed}M`) : "down";
+      const tip = `Port ${p.idx} · ${p.ifname} · ${p.name}${p.role === "wan" ? " · WAN" : ""} · ${p.up ? `up ${p.speed} Mbps${p.full_duplex === false ? " half duplex" : ""} · ↓${fmtRate(p.rx)} ↑${fmtRate(p.tx)}` : "down"}${p.media ? " · " + p.media : ""}`;
+      const jw = Math.min(TW - 12, 48);
+      const y0 = TOP + JH + 18;
+      return `<g class="port"><title>${esc(tip)}</title>
+        <rect class="led ${p.up ? "up" : "down"}" x="${cx - 6}" y="${TOP - 7}" width="12" height="4" rx="1.5"/>
+        <rect class="jack rj45${p.role === "wan" ? " wan" : ""}" x="${cx - jw / 2}" y="${TOP}" width="${jw}" height="${JH}" rx="2"/>
+        <text class="gw-pn" x="${cx}" y="${y0}">${p.idx}${p.role === "wan" ? " WAN" : ""}</text>
+        ${named[i].map((l, k) => `<text class="gw-pl" x="${cx}" y="${y0 + 16 + k * 15}">${esc(l)}</text>`).join("")}
+        <text class="gw-ps ${p.up ? "" : "off"}" x="${cx}" y="${y0 + 16 + rows * 15}">${esc(sp)}</text></g>`;
+    })
+    .join("");
+  return `<svg class="dev gw ports" viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(g.model || "Gateway")} ports">
+    <rect class="sw-body" x="0.5" y="0.5" width="${W - 1}" height="${H - 1}" rx="6"/>
+    <circle class="led-status ${esc(status)}" cx="${PAD + 5}" cy="13" r="4"/>
+    <text class="gw-model" x="${PAD + 15}" y="17">${esc(g.model || "Gateway")}</text>
+    ${tiles}</svg>`;
 }
 
 function deviceGraphic(n, mini) {
@@ -179,11 +342,13 @@ function deviceGraphic(n, mini) {
     const img = `<img class="${mini ? "photo-mini" : "photo"}" src="${esc(g.image)}" alt="${esc(g.model || n.name)}" loading="lazy">`;
     if (mini) return img;
     // Photo of the hardware; switches also keep the live port-LED panel underneath.
-    return g.type === "switch" ? `${img}<div class="sublabel">Live port status</div>${switchSvg(g)}` : img;
+    if (g.type === "switch") return `${img}<div class="sublabel">Live port status</div>${switchSvg(g)}`;
+    if (g.type === "gateway" && g.ports?.length) return `${img}<div class="sublabel">Live port status</div>${gatewaySvg(n.status, false, g)}`;
+    return img;
   }
   if (g.type === "switch") return mini ? switchMini(g) : switchSvg(g);
   if (g.type === "ap") return apSvg(g, n.status, mini);
-  if (g.type === "gateway") return gatewaySvg(n.status, mini);
+  if (g.type === "gateway") return gatewaySvg(n.status, mini, g);
   return "";
 }
 
@@ -301,6 +466,13 @@ class OvCirrusNetworkMap extends HTMLElement {
       stored = null; // storage blocked: fall back to the card setting
     }
     this._tp = stored || configText(this._config);
+    let lg = null;
+    try {
+      lg = localStorage.getItem(LINK_GRAPHS_KEY);
+    } catch (e) {
+      lg = null;
+    }
+    this._linkGraphs = lg === null ? !!this._config.link_graphs : lg === "1";
     this._local = { ...(this._local || {}), font: !!stored };
   }
 
@@ -332,6 +504,97 @@ class OvCirrusNetworkMap extends HTMLElement {
       this._fetch();
       this._timer = setInterval(() => this._fetch(), Math.max(10, this._config.refresh) * 1000);
     }
+    if (!this._rTimer) this._rTimer = setInterval(() => this._fetchRates(), 15000);
+    const dark = !!hass?.themes?.darkMode;
+    if (dark !== this.hasAttribute("dark")) this.toggleAttribute("dark", dark);
+  }
+
+  // Which history ranges are on screen: the open gateway panel's graph, and the trends on the map's links.
+  _ratesWanted() {
+    const site = this._sites?.[this._siteIdx];
+    if (!site) return [];
+    const want = new Set();
+    const sel = this._selected && this._index?.get(this._selected);
+    if (sel?.unifi) want.add(this._rRange || "2h");
+    if (LINK_GRAPHS && [...(this._index?.values() || [])].some((n) => n.unifi)) want.add("30m");
+    return [...want];
+  }
+
+  async _fetchRates() {
+    const want = this._ratesWanted();
+    const entryId = this._sites?.[this._siteIdx]?.entry_id;
+    if (!want.length || !entryId || !this._hass || this._rLoading) return;
+    this._rLoading = true;
+    try {
+      for (const range of want) {
+        RATES[range] = await this._hass.callWS({ type: "ovcirrus/rates", entry_id: entryId, range });
+        RATES[range]._at = Date.now();
+      }
+    } catch (err) {
+      console.debug("ovcirrus: rates", err);
+    }
+    this._rLoading = false;
+    this._updateRates();
+  }
+
+  // Refresh the graphs in place (no full redraw, so hovering and scrolling are undisturbed).
+  _updateRates() {
+    const root = this.shadowRoot;
+    root.querySelectorAll(".lspark[data-port]").forEach((el) => (el.innerHTML = sparkSvg(ratePoints("30m", el.dataset.port))));
+    const range = this._rRange || "2h";
+    root.querySelectorAll(".tspark[data-port]").forEach((el) => {
+      if (el.innerHTML) el.innerHTML = sparkSvg(ratePoints(range, el.dataset.port), 48, 16);
+    });
+    const wrap = root.querySelector(".uchartwrap");
+    if (wrap) {
+      const pts = ratePoints(wrap.dataset.range, wrap.dataset.port);
+      wrap.innerHTML = `${bandwidthChart(pts, wrap.dataset.range, wrap.dataset.dn, wrap.dataset.up)}<div class="utip" hidden></div>`;
+      const last = pts[pts.length - 1];
+      const nowDn = root.querySelector('[data-now="dn"]'), nowUp = root.querySelector('[data-now="up"]');
+      if (last && nowDn) nowDn.textContent = fmtRate(last[1]);
+      if (last && nowUp) nowUp.textContent = fmtRate(last[2]);
+      this._bindChart(wrap, pts);
+    }
+  }
+
+  _bindChart(wrap, pts) {
+    const svg = wrap.querySelector("svg.uchart");
+    const hit = svg?.querySelector(".hit");
+    const tip = wrap.querySelector(".utip");
+    if (!svg || !hit || !tip || pts.length < 2) return;
+    const d = svg.dataset;
+    const [W, L, R, T, B, H] = ["w", "l", "r", "t", "b", "h"].map((k) => Number(d[k]));
+    const t0 = Number(d.t0), span = Number(d.span), ymax = Number(d.ymax), unit = Number(d.unit);
+    const X = (t) => L + ((t - t0) / span) * (W - L - R);
+    const Y = (b) => T + (1 - (b * 8) / unit / ymax) * (H - T - B);
+    const g = svg.querySelector(".hover");
+    const show = (ev) => {
+      const box = svg.getBoundingClientRect();
+      const x = ((ev.clientX - box.left) * W) / box.width;
+      const t = t0 + ((x - L) / (W - L - R)) * span;
+      let best = pts[0];
+      for (const p of pts) if (Math.abs(p[0] - t) < Math.abs(best[0] - t)) best = p;
+      const cx = X(best[0]);
+      g.setAttribute("visibility", "visible");
+      const cross = g.querySelector(".cross");
+      cross.setAttribute("x1", cx);
+      cross.setAttribute("x2", cx);
+      const [dDot, uDot] = g.querySelectorAll(".hdot");
+      dDot.setAttribute("cx", cx);
+      dDot.setAttribute("cy", Y(best[1]));
+      uDot.setAttribute("cx", cx);
+      uDot.setAttribute("cy", Y(best[2]));
+      tip.hidden = false;
+      tip.innerHTML = `<b>${hhmm(best[0])}</b><span><i class="key dn"></i>↓ ${esc(fmtRate(best[1]))}</span><span><i class="key up"></i>↑ ${esc(fmtRate(best[2]))}</span>`;
+      const px = (cx / W) * box.width;
+      tip.style.left = `${Math.min(box.width - tip.offsetWidth - 4, Math.max(4, px + 10))}px`;
+    };
+    hit.addEventListener("pointermove", show);
+    hit.addEventListener("pointerdown", show);
+    hit.addEventListener("pointerleave", () => {
+      g.setAttribute("visibility", "hidden");
+      tip.hidden = true;
+    });
   }
 
   connectedCallback() {
@@ -352,11 +615,14 @@ class OvCirrusNetworkMap extends HTMLElement {
       this._fetch();
       this._timer = setInterval(() => this._fetch(), Math.max(10, this._config.refresh) * 1000);
     }
+    if (this._hass && !this._rTimer) this._rTimer = setInterval(() => this._fetchRates(), 15000);
   }
 
   disconnectedCallback() {
     clearInterval(this._timer);
     this._timer = null;
+    clearInterval(this._rTimer);
+    this._rTimer = null;
   }
 
   async _fetch() {
@@ -425,13 +691,15 @@ class OvCirrusNetworkMap extends HTMLElement {
         ...members.map(
           (m, i) =>
             8 + 2 + 11 + this._textWidth(m.label, "600 10.5px") + this._textWidth(m.speed ? ` ${m.speed} ` : " ", "10.5px") +
-            this._chipsWidth(m, 4, `${c.id}:${i}`)
+            this._chipsWidth(m, 4, `${c.id}:${i}`) + (m.peer ? this._textWidth(` ${peerText(m.peer)} `, "10.5px") + 12 + (LINK_GRAPHS ? SPARK_W + 6 : 0) : 0)
         )
       );
       return { right: offset + widest, rows: members.length };
     }
     if (!link.label && !members.length) return { right: 0, rows: 0 };
-    const w = 8 + 2 + this._textWidth(`${link.label || ""} `, "10.5px") + (members[0] ? this._chipsWidth(members[0], 3, `${c.id}:0`) : 0);
+    const extra = (link.rate ? this._textWidth(` ${wanText(link)} `, "10.5px") + 8 : members[0]?.peer ? this._textWidth(` ${peerText(members[0].peer)} `, "10.5px") + 12 : 0) +
+      (LINK_GRAPHS && (link.rate || members[0]?.peer) ? SPARK_W + 6 : 0);
+    const w = 8 + 2 + this._textWidth(`${link.label || ""} `, "10.5px") + (members[0] ? this._chipsWidth(members[0], 3, `${c.id}:0`) : 0) + extra;
     return { right: 8 + w, rows: 1 };
   }
 
@@ -595,6 +863,8 @@ class OvCirrusNetworkMap extends HTMLElement {
             status: link.status || "up",
             dashed: !!link.inferred,
             links: link.links || [],
+            rate: link.rate || null,
+            latency: link.latency ?? null,
           });
           cxs += c._slot + GAP_X;
         }
@@ -698,7 +968,7 @@ class OvCirrusNetworkMap extends HTMLElement {
       if (tests.length) {
         root.subtitle = speedText(tests[0]);
         const gw = root.groups[0]?.children?.[0];
-        if (gw) gw.link = { ...(gw.link || {}), label: speedText(tests[0]), status: root.status === "offline" ? "down" : "up" };
+        if (gw && !gw.link?.rate) gw.link = { ...(gw.link || {}), label: speedText(tests[0]), status: root.status === "offline" ? "down" : "up" };
       }
       this._index = new Map();
       const walk = (n) => {
@@ -714,6 +984,7 @@ class OvCirrusNetworkMap extends HTMLElement {
         n._rw = null;
       }
       VLAN_EXPANDED = this._vmore || (this._vmore = new Set());
+      LINK_GRAPHS = !!this._linkGraphs;
       this._measure(root);
       const out = { nodes: [], groups: [], edges: [], trunks: [], maxY: 0 };
       if (!this._drag) this._offsets = { ...(site.positions || {}), ...(this._localOffsets || {}) };
@@ -755,44 +1026,68 @@ class OvCirrusNetworkMap extends HTMLElement {
             const rows = members.map((m, i) => {
               const key = `${e.cid}:${i}`;
               const w = 10 + 8 + 3 + this._textWidth(m.label, "600 10.5px") +
-                this._textWidth(m.speed ? ` ${m.speed} ` : " ", "10.5px") + this._chipsWidth(m, 4, key);
+                this._textWidth(m.speed ? ` ${m.speed} ` : " ", "10.5px") + this._chipsWidth(m, 4, key) +
+                (m.peer ? this._textWidth(` ${peerText(m.peer)} `, "10.5px") + 12 + (LINK_GRAPHS ? SPARK_W + 6 : 0) : 0);
               const y = y2 - LABEL_ROW * (n - i) - 4;
               return { m, key, y, cx: lx + w / 2, cy: y + rowH / 2, left: lx, right: lx + w };
             });
-            const top = rows[0].y, bottom = rows[n - 1].y + rowH;
-            const side = bottom < py - 16 ? "top" : top > py + ph + 16 ? "bottom" : lx > pcx ? "right" : "left";
+            // The bundle runs as one ribbon from the parent's block to the child's block: each line keeps
+            // the same offset across the ribbon (measured to the right of the direction of travel) from end to end,
+            // so the lines stay parallel and never cross however the blocks are arranged. Port labels stay inside
+            // the child's block, matched to their line by colour.
+            const c = e.to;
+            const cb = c._box;
+            const alone = cb && cb.children?.length === 1;
+            const T = cb && cb._bw
+              ? alone
+                ? { x: cb._bx, y: cb._y, w: cb._bw, h: cb._h }
+                : { x: c._x, y: cb._y, w: c._rw || c._cw, h: cb._h }
+              : { x: c._x, y: c._y, w: c._rw || c._cw, h: c._ch || CHIP_H };
+            const tcx = T.x + T.w / 2, tcy = T.y + T.h / 2;
+            let d1, S, E;
+            if (T.y > py + ph + 16) {
+              d1 = [0, 1]; S = [pcx, py + ph]; E = [tcx, T.y];
+            } else if (T.y + T.h < py - 16) {
+              d1 = [0, -1]; S = [pcx, py]; E = [tcx, T.y + T.h];
+            } else if (tcx >= pcx) {
+              d1 = [1, 0]; S = [px + pw, pcy]; E = [T.x, tcy];
+            } else {
+              d1 = [-1, 0]; S = [px, pcy]; E = [T.x + T.w, tcy];
+            }
+            // Where the two blocks overlap enough (one above the other, or side by side), run the ribbon straight
+            // across the shared part instead of bending it into the gap.
+            const ribbon = (n - 1) * LABEL_ROW;
+            const axis = d1[0] ? 1 : 0; // the coordinate across the ribbon: x for vertical runs, y for sideways
+            const lo = axis ? Math.max(py, T.y) : Math.max(px, T.x);
+            const hi = axis ? Math.min(py + ph, T.y + T.h) : Math.min(px + pw, T.x + T.w);
+            if (hi - lo >= ribbon + 24) {
+              const want = ((axis ? pcy : pcx) + (axis ? tcy : tcx)) / 2;
+              const at = Math.min(hi - ribbon / 2 - 12, Math.max(lo + ribbon / 2 + 12, want));
+              S[axis] = at;
+              E[axis] = at;
+            }
+            const d2 = d1; // leave one block and enter the other square on, in the same direction
+            const nrm = [-d1[1], d1[0]]; // right-hand normal (screen y points down)
+            const sgn = d1[1] > 0 || d1[0] < 0 ? 1 : -1; // first port on the left going down, on top going sideways
+            const gap = LABEL_ROW;
+            const span = Math.abs(d1[0] ? E[0] - S[0] : E[1] - S[1]);
+            const h = Math.max(24, span / 2);
+            const r = (v) => Math.round(v * 10) / 10;
             return rows
-              .map(({ m, key, y, cx, cy, left, right }, i) => {
+              .map(({ m, key, y }, i) => {
                 const color = sv !== null && carries(m, sv) ? vlanColor(sv) : vlanColor(m.untagged?.[0]);
                 labels.push({
                   gid: e.gid,
                   x: lx,
                   y,
-                  html: `<i class="sw" style="background:${color}"></i><b>${esc(m.label)}</b>${m.speed ? ` ${esc(m.speed)}` : ""} ${vlanChips(m, 4, key)}`,
+                  html: `<i class="sw" style="background:${color}"></i><b>${esc(m.label)}</b>${m.speed ? ` ${esc(m.speed)}` : ""} ${vlanChips(m, 4, key)}${peerHtml(m.peer)}`,
                   open: VLAN_EXPANDED.has(key),
                   dim: sv !== null && !carries(m, sv),
                 });
-                const off = (i - (n - 1) / 2) * step;
-                let sx, sy, c1x, c1y;
-                if (side === "bottom" || side === "top") {
-                  sx = pcx + off;
-                  sy = side === "bottom" ? py + ph : py;
-                  const h = Math.max(24, Math.abs(cy - sy) / 2);
-                  c1x = sx;
-                  c1y = side === "bottom" ? sy + h : sy - h;
-                } else {
-                  sx = side === "right" ? px + pw : px;
-                  sy = pcy + off;
-                  const h = Math.max(24, Math.abs(left - sx) / 2);
-                  c1x = side === "right" ? sx + h : sx - h;
-                  c1y = sy;
-                }
-                // enter the label horizontally from the parent's side, aimed at the label's centre
-                const fromLeft = sx <= cx;
-                const edgeX = fromLeft ? left : right;
-                const h2 = Math.max(20, Math.min(90, Math.abs(edgeX - sx) / 2));
-                const c2x = fromLeft ? edgeX - h2 : edgeX + h2;
-                return `<path class="${lineCls(m.status, m)} member" style="--c:${color}" d="M${sx},${sy} C${c1x},${c1y} ${c2x},${cy} ${edgeX},${cy} L${cx},${cy}"/>`;
+                const k = sgn * ((n - 1) / 2 - i) * gap;
+                const sx = S[0] + k * nrm[0], sy = S[1] + k * nrm[1];
+                const ex = E[0] + k * nrm[0], ey = E[1] + k * nrm[1];
+                return `<path class="${lineCls(m.status, m)} member" style="--c:${color}" d="M${r(sx)},${r(sy)} C${r(sx + d1[0] * h)},${r(sy + d1[1] * h)} ${r(ex - d2[0] * h)},${r(ey - d2[1] * h)} ${r(ex)},${r(ey)}"/>`;
               })
               .join("");
           }
@@ -802,7 +1097,13 @@ class OvCirrusNetworkMap extends HTMLElement {
               gid: e.gid,
               x: x2 + 8,
               y: y2 - LABEL_ROW - 3,
-              html: `${esc(e.label)} ${m ? vlanChips(m, 3, `${e.cid}:0`) : ""}`,
+              html: `${esc(e.label)} ${m ? vlanChips(m, 3, `${e.cid}:0`) : ""}${m?.peer ? peerHtml(m.peer) : ""}${
+                e.rate
+                  ? ` <span class="rate ${linkLoad(e.rate.rx, e.rate.tx, e.rate.speed)}" title="WAN port ${esc(e.label)}: download ${esc(fmtRate(e.rate.rx))}, upload ${esc(fmtRate(e.rate.tx))}${e.latency !== null ? `, latency ${Math.round(e.latency)} ms` : ""}">${esc(wanText(e))}</span>${
+                      LINK_GRAPHS && e.rate.port ? `<span class="lspark" data-port="${esc(e.rate.port)}">${sparkSvg(ratePoints("30m", e.rate.port))}</span>` : ""
+                    }`
+                  : ""
+              }`,
               open: VLAN_EXPANDED.has(`${e.cid}:0`),
               dim: sv !== null && !(m && carries(m, sv)),
             });
@@ -835,7 +1136,8 @@ class OvCirrusNetworkMap extends HTMLElement {
           const badge =
             (n.badge ? `<span class="badge">${n.badge}</span>` : "") +
             (n.logo ? `<img class="logo" src="${esc(n.logo)}" alt="" loading="lazy">` : "") +
-            (n.is_new ? `<span class="new">NEW</span>` : "");
+            (n.is_new ? `<span class="new">NEW</span>` : "") +
+            (n.alert ? `<span class="alertdot ${esc(n.alert)}" title="${esc((n.unifi?.alerts || []).map((a) => a.text).join(", "))}">!</span>` : "");
           const sel =
             (this._editLayout && DRAGGABLE.has(n.kind) ? " draggable" : "") +
             (this._drag?.id === n.id && this._drag.moved ? " dragging" : "") +
@@ -1006,9 +1308,9 @@ class OvCirrusNetworkMap extends HTMLElement {
           : `<button class="act ghost" data-startedit>Rename / change type</button>`
         : "";
     const panel = sel
-      ? `<div class="panel ${g?.type === "switch" ? "wide" : ""}"><div class="ptitle"><ha-icon icon="${esc(sel.icon)}"></ha-icon><b>${esc(sel.name)}</b>
+      ? `<div class="panel ${g?.type === "switch" ? "wide xwide" : sel.unifi ? "wide" : ""}"><div class="ptitle"><ha-icon icon="${esc(sel.icon)}"></ha-icon><b>${esc(sel.name)}</b>
            ${sel.is_new ? `<span class="new inline">NEW</span>` : ""}<button class="close" data-close>×</button></div>${graphicBlock}
-           ${speedBlock}
+           ${speedBlock}${this._unifiBlock(sel)}
            <table>${(sel.details || []).map(([k, v]) => `<tr><td>${esc(k)}</td><td>${esc(v)}</td></tr>`).join("")}</table>
            ${servicesBlock}${editBlock}${deviceActions}</div>`
       : "";
@@ -1086,6 +1388,72 @@ class OvCirrusNetworkMap extends HTMLElement {
     if (!this._local?.device && ds) this._ds = ds;
   }
 
+  _chartBlock(u, port, range) {
+    const p = (u.ports || []).find((x) => x.ifname === port) || {};
+    const wan = p.role === "wan";
+    const title = wan && /^Port \d+$/.test(p.name || "") ? "WAN" : p.name || port;
+    const dnLabel = wan ? "Download" : `To ${p.name || port}`, upLabel = wan ? "Upload" : `From ${p.name || port}`;
+    const pts = ratePoints(range, port);
+    const last = pts[pts.length - 1];
+    const now = (k) => (last ? fmtRate(last[k]) : "–");
+    return `<div class="uchead"><b>${esc(title)}</b><span class="muted">${esc(port)}${wan && title !== "WAN" ? " · WAN" : ""}</span>
+        <span class="rchips">${[["30m", "30 min"], ["2h", "2 h"], ["24h", "24 h"]]
+          .map(([k, l]) => `<button class="rchip${k === range ? " on" : ""}" data-rrange="${k}">${l}</button>`)
+          .join("")}</span></div>
+      <div class="ulegend"><span><i class="key dn"></i>↓ ${esc(dnLabel)} <b data-now="dn">${esc(now(1))}</b></span><span><i class="key up"></i>↑ ${esc(upLabel)} <b data-now="up">${esc(now(2))}</b></span></div>
+      <div class="uchartwrap" data-port="${esc(port)}" data-range="${range}" data-dn="${esc(dnLabel)}" data-up="${esc(upLabel)}">${bandwidthChart(pts, range, dnLabel, upLabel)}<div class="utip" hidden></div></div>`;
+  }
+
+  // Gateway details from the UniFi controller: port table, Internet and health.
+  _unifiBlock(sel) {
+    const u = sel?.unifi;
+    if (!u) return "";
+    const range = this._rRange || "2h";
+    const port = this._rPort || (u.ports || []).find((p) => p.role === "wan")?.ifname || u.ports?.[0]?.ifname;
+    const pct = (v) => (num(v) === null ? "" : `${Math.round(v)}%`);
+    const bytes = (v) => (num(v) === null ? "" : v >= 1e9 ? `${(v / 1e9).toFixed(1)} GB` : v >= 1e6 ? `${Math.round(v / 1e6)} MB` : `${Math.round(v / 1e3)} kB`);
+    const row = (k, v, extra) => (v === "" || v == null ? "" : `<tr><td>${esc(k)}</td><td>${esc(v)}${extra ? `<div class="muted">${esc(extra)}</div>` : ""}</td></tr>`);
+    const alerts = (u.alerts || [])
+      .map((a) => `<div class="ualert ${esc(a.level)}"><ha-icon icon="${a.level === "info" ? "mdi:information-outline" : "mdi:alert"}"></ha-icon>${esc(a.text)}</div>`)
+      .join("");
+    const ports = (u.ports || [])
+      .map((p) => {
+        const load = p.up ? linkLoad(p.rx, p.tx, p.speed) : "";
+        const dn = p.role === "wan" ? p.rx : p.tx, upv = p.role === "wan" ? p.tx : p.rx;
+        return `<tr class="${p.up ? "" : "off"}${p.ifname === port ? " sel" : ""}" data-rport="${esc(p.ifname)}" title="Show ${esc(p.name)} on the graph"><td>${esc(p.ifname)}</td><td>${esc(p.name)}${p.role === "wan" ? ` <span class="tag">WAN</span>` : ""}</td>
+          <td>${p.up ? `${p.speed >= 1000 ? p.speed / 1000 + "G" : p.speed + "M"}` : "down"}</td>
+          <td class="trend"><span class="tspark" data-port="${esc(p.ifname)}">${p.up ? sparkSvg(ratePoints(range, p.ifname), 48, 16) : ""}</span></td>
+          <td class="num ${load}">${p.up ? esc(fmtRate(dn)) : ""}</td><td class="num ${load}">${p.up ? esc(fmtRate(upv)) : ""}</td></tr>`;
+      })
+      .join("");
+    const i = u.internet || {};
+    const st = i.speedtest || {};
+    const h = u.health || {};
+    const temps = (h.temps || []).map((t) => `${t.name} ${t.value} °C`).join(", ");
+    const store = (h.storage || []).map((x) => `${x.name} ${bytes(x.used)} of ${bytes(x.size)}`).join(" · ");
+    const mons = (i.monitors || []).filter((m) => m.latency != null).map((m) => `${m.target} ${m.latency} ms`).join(" · ");
+    return `${alerts ? `<div class="ualerts">${alerts}</div>` : ""}
+      <div class="section"><div class="sublabel">Ports</div>
+        <table class="uports"><tr><th>Port</th><th>Name</th><th>Link</th><th>Trend</th><th class="num" title="Towards the device on this port (WAN: download)">↓</th><th class="num" title="From the device on this port (WAN: upload)">↑</th></tr>${ports}</table></div>
+      <div class="section"><div class="sublabel">Bandwidth</div>${this._chartBlock(u, port, range)}</div>
+      <div class="section"><div class="sublabel">Internet</div><table>
+        ${row("Status", [i.status, i.isp].filter(Boolean).join(" · "))}
+        ${row("WAN IP", i.wan_ip)}
+        ${row("Traffic", i.port ? `↓ ${fmtRate(i.rx)} · ↑ ${fmtRate(i.tx)}` : "", i.port ? `on ${i.port}${i.link_speed ? ", " + i.link_speed + " Mbps link" : ""}` : "")}
+        ${row("Availability", num(i.availability) !== null ? `${i.availability}%` : "")}
+        ${row("Latency", num(i.latency) !== null ? `${Math.round(i.latency)} ms` : "", mons)}
+        ${row("Speed test", st.down ? `↓ ${Math.round(st.down)} / ↑ ${Math.round(st.up)} Mbps${st.ping ? ` · ${Math.round(st.ping)} ms` : ""}` : "", [st.ts ? ago(st.ts) : "", st.server].filter(Boolean).join(" · "))}
+      </table></div>
+      <div class="section"><div class="sublabel">Health</div><table>
+        ${row("CPU", pct(h.cpu), (h.load || []).every((v) => v != null) ? `load ${h.load.join(" / ")}` : "")}
+        ${row("Memory", pct(h.mem))}
+        ${row("Temperature", temps, h.overheating ? "overheating" : "")}
+        ${row("Firmware", h.version ? `${h.version}${h.upgradable ? ` → ${h.upgrade_to || "update available"}` : " (up to date)"}` : "")}
+        ${row("Storage", store)}
+        ${row("Threat signatures", h.ips_rules ? `${Number(h.ips_rules).toLocaleString()} rules` : "", h.ips_updated ? `updated ${ago(h.ips_updated)}` : "")}
+      </table></div>`;
+  }
+
   _viewMenu() {
     const row = (label, key, value, hint) => `<div class="vrow"><span class="vlab">${label}<small>${hint}</small></span>
       <span class="vctl"><button data-${key}="-" aria-label="Smaller ${label.toLowerCase()}">−</button><b>${value}</b><button data-${key}="+" aria-label="Larger ${label.toLowerCase()}">+</button></span></div>`;
@@ -1097,6 +1465,8 @@ class OvCirrusNetworkMap extends HTMLElement {
       ${row("Text", "font", `${this._tp || TEXT_DEFAULT}pt`, "size of device names; other map labels follow")}
       ${row("Clients", "csize", `${this._cs || 1}×`, "wireless and wired clients")}
       ${row("Devices", "dsize", `${this._ds || 1}×`, "switches, APs, gateway, client counts")}
+      <label class="vrow vtoggle"><span class="vlab">Traffic graphs on links<small>a small 30-minute trend next to each gateway link's live rate</small></span>
+        <input type="checkbox" data-linkgraphs ${this._linkGraphs ? "checked" : ""}></label>
       <div class="vfoot">
         ${this._isAdmin ? `<button class="act" data-viewsave title="Every browser and device starts with these sizes">Save as default for all devices</button>` : ""}
         <button class="act ghost" data-viewreset>${saved ? "Use saved default" : "Reset"}</button>
@@ -1549,6 +1919,33 @@ class OvCirrusNetworkMap extends HTMLElement {
         this._render();
       })
     );
+    root.querySelector("[data-linkgraphs]")?.addEventListener("change", (ev) => {
+      this._linkGraphs = ev.target.checked;
+      try {
+        localStorage.setItem(LINK_GRAPHS_KEY, this._linkGraphs ? "1" : "0");
+      } catch (e) {
+        // storage blocked: applies until the page reloads
+      }
+      this._render();
+    });
+    root.querySelectorAll("[data-rrange]").forEach((b) =>
+      b.addEventListener("click", () => {
+        this._rRange = b.dataset.rrange;
+        this._render();
+      })
+    );
+    root.querySelectorAll("tr[data-rport]").forEach((r) =>
+      r.addEventListener("click", () => {
+        this._rPort = r.dataset.rport;
+        this._render();
+      })
+    );
+    {
+      const wrap = root.querySelector(".uchartwrap");
+      if (wrap) this._bindChart(wrap, ratePoints(wrap.dataset.range, wrap.dataset.port));
+      const want = this._ratesWanted();
+      if (want.some((r) => !RATES[r] || Date.now() - (RATES[r]._at || 0) > 20000)) this._fetchRates();
+    }
     root.querySelectorAll("[data-zoom]").forEach((b) =>
       b.addEventListener("click", () => {
         const z = this._zoom ?? this._fitZoom ?? 1;
@@ -1816,6 +2213,77 @@ const STYLE = `
   .toggle { flex:0 0 auto; width:20px; height:20px; padding:0; border:1px solid var(--secondary-text-color); border-radius:4px;
     background:var(--card-background-color); color:var(--primary-text-color); cursor:pointer; line-height:16px; }
   .panel.wide { width:460px; }
+  .panel.xwide { width:740px; }
+  .elabel .peer { color:var(--primary-text-color); font-weight:500; }
+  .elabel .rate { font-variant-numeric:tabular-nums; color:var(--secondary-text-color); }
+  .rate.warn, td.num.warn { color:var(--warning-color,#ffa600); font-weight:600; }
+  .rate.high, td.num.high { color:var(--error-color,#db4437); font-weight:600; }
+  .rate.down { color:var(--error-color,#db4437); }
+  .alertdot { position:absolute; left:-4px; top:-4px; min-width:16px; height:16px; line-height:16px; border-radius:8px; text-align:center;
+    font-size:11px; font-weight:700; color:#fff; background:var(--warning-color,#ffa600); box-shadow:0 0 0 2px var(--card-background-color); }
+  .alertdot.error { background:var(--error-color,#db4437); }
+  .node.big .alertdot { min-width:calc(var(--bs) * 0.9); height:calc(var(--bs) * 0.9); line-height:calc(var(--bs) * 0.9);
+    border-radius:calc(var(--bs) * 0.45); font-size:calc(var(--bs) * 0.55); left:2px; top:2px; }
+  .ualerts { display:grid; gap:4px; margin:4px 0 8px; }
+  .ualert { display:flex; align-items:center; gap:6px; font-size:12px; padding:5px 8px; border-radius:6px;
+    background:color-mix(in srgb, var(--warning-color,#ffa600) 15%, transparent); }
+  .ualert.error { background:color-mix(in srgb, var(--error-color,#db4437) 15%, transparent); }
+  .ualert.info { background:color-mix(in srgb, var(--primary-color) 12%, transparent); }
+  .ualert ha-icon { --mdc-icon-size:16px; }
+  table.uports th { text-align:left; font-weight:600; font-size:11px; color:var(--secondary-text-color); padding:2px 4px; }
+  table.uports td { padding:3px 4px; }
+  table.uports td.num, table.uports th.num { text-align:right; font-variant-numeric:tabular-nums; white-space:nowrap; }
+  table.uports tr.off td { color:var(--secondary-text-color); }
+  .jack.wan { stroke:var(--primary-color); stroke-width:1.4; }
+  .sw-title { fill:#e8edf1; font:700 11px var(--ovc-font-data, ui-monospace, monospace); }
+  .sw-poe2 { fill:#9fb0bd; font-weight:600; }
+  .sw-pn { fill:#c3ced6; font:700 10px var(--ovc-font-data, ui-monospace, monospace); text-anchor:middle; }
+  .sw-pn.down, .sw-pn.unknown { fill:#7d8992; }
+  .sw-pn.off { fill:#c9a24a; }
+  .gw-model { fill:#e8edf1; font:700 12px var(--ovc-font-data, ui-monospace, monospace); }
+  .gw-pn { fill:#e8edf1; font:600 13px var(--ovc-font-data, ui-monospace, monospace); text-anchor:middle; }
+  .gw-pl { fill:#c3ced6; font:700 12px var(--ovc-font-data, ui-monospace, monospace); text-anchor:middle; }
+  .gw-ps { fill:#7fd19a; font:700 12px var(--ovc-font-data, ui-monospace, monospace); text-anchor:middle; }
+  .gw-ps.off { fill:#8a96a0; }
+  .pgraphic svg.dev.gw.ports { width:100%; height:auto; }
+  :host { --ovc-dn:#2a78d6; --ovc-up:#eb6834; --ovc-grid:color-mix(in srgb, var(--primary-text-color) 9%, transparent); }
+  :host([dark]) { --ovc-dn:#3987e5; --ovc-up:#d95926; }
+  .uchead { display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin:2px 0 4px; }
+  .uchead .muted { font-size:11px; }
+  .rchips { margin-left:auto; display:inline-flex; gap:4px; }
+  .rchip { font:inherit; font-size:11px; padding:2px 8px; border-radius:10px; cursor:pointer; border:1px solid var(--divider-color);
+    background:var(--card-background-color); color:var(--primary-text-color); }
+  .rchip.on { border-color:var(--primary-color); color:var(--primary-color); font-weight:600; }
+  .ulegend { display:flex; gap:14px; flex-wrap:wrap; font-size:11.5px; color:var(--secondary-text-color); margin-bottom:2px; }
+  .ulegend b { color:var(--primary-text-color); font-weight:600; font-variant-numeric:tabular-nums; margin-left:2px; }
+  i.key { display:inline-block; width:12px; height:2px; border-radius:1px; vertical-align:middle; margin-right:5px; }
+  i.key.dn { background:var(--ovc-dn); } i.key.up { background:var(--ovc-up); }
+  .uchartwrap { position:relative; }
+  svg.uchart { display:block; width:100%; height:auto; touch-action:none; }
+  svg.uchart .grid { stroke:var(--ovc-grid); stroke-width:1; }
+  svg.uchart .ytick { fill:var(--secondary-text-color); font-size:9.5px; text-anchor:end; font-variant-numeric:tabular-nums; }
+  svg.uchart .xtick { fill:var(--secondary-text-color); font-size:9.5px; text-anchor:middle; }
+  svg.uchart .yunit { fill:var(--secondary-text-color); font-size:9.5px; text-anchor:start; }
+  svg.uchart .area.dn { fill:var(--ovc-dn); opacity:.12; }
+  svg.uchart .line { fill:none; stroke-width:2; stroke-linejoin:round; stroke-linecap:round; }
+  svg.uchart .line.dn { stroke:var(--ovc-dn); } svg.uchart .line.up { stroke:var(--ovc-up); }
+  svg.uchart .peak { fill:var(--ovc-dn); stroke:var(--card-background-color); stroke-width:2; }
+  svg.uchart .peaklabel { fill:var(--primary-text-color); font-size:10px; font-weight:600; paint-order:stroke; stroke:var(--card-background-color); stroke-width:3px; }
+  svg.uchart .cross { stroke:var(--secondary-text-color); stroke-width:1; }
+  svg.uchart .hdot { stroke:var(--card-background-color); stroke-width:2; } svg.uchart .hdot.dn { fill:var(--ovc-dn); } svg.uchart .hdot.up { fill:var(--ovc-up); }
+  svg.uchart .hit { fill:transparent; cursor:crosshair; }
+  .utip { position:absolute; top:4px; display:grid; gap:2px; padding:5px 8px; border-radius:6px; font-size:11px; pointer-events:none;
+    background:var(--card-background-color); border:1px solid var(--divider-color); box-shadow:0 2px 6px rgba(0,0,0,.12); white-space:nowrap; }
+  .utip[hidden] { display:none; }
+  .uchart-empty { font-size:12px; color:var(--secondary-text-color); padding:24px 4px; text-align:center; border:1px dashed var(--divider-color); border-radius:8px; }
+  svg.spark { display:block; } svg.spark .spark-line { fill:none; stroke:var(--ovc-dn); stroke-width:1.4; stroke-linejoin:round; }
+  svg.spark .spark-area { fill:var(--ovc-dn); opacity:.14; } svg.spark .spark-base { stroke:var(--ovc-grid); }
+  .lspark { display:inline-block; vertical-align:middle; margin-left:4px; }
+  table.uports tr[data-rport] { cursor:pointer; }
+  table.uports tr.sel td { background:color-mix(in srgb, var(--primary-color) 9%, transparent); }
+  table.uports td.trend { padding:2px 4px; width:48px; }
+  table.uports td:nth-child(3), table.uports td:nth-child(1) { white-space:nowrap; }
+  .vtoggle { cursor:pointer; } .vtoggle input { width:18px; height:18px; accent-color:var(--primary-color); }
   .panel { position:absolute; right:12px; top:58px; width:320px; max-width:calc(100% - 24px); max-height:70%; overflow:auto;
     background:var(--card-background-color); border:1px solid var(--divider-color); border-radius:12px;
     box-shadow:0 4px 16px rgba(0,0,0,.2); padding:10px 12px; z-index:2; }

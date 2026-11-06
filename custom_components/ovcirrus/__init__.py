@@ -107,6 +107,7 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     websocket_api.async_register_command(hass, ws_save_view)
     websocket_api.async_register_command(hass, ws_reset_positions)
     websocket_api.async_register_command(hass, ws_backup)
+    websocket_api.async_register_command(hass, ws_rates)
     websocket_api.async_register_command(hass, ws_restore)
     return True
 
@@ -135,6 +136,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: CirrusConfigEntry) -> bo
     coordinator = CirrusCoordinator(hass, entry, client, hass.data[DOMAIN]["assets"], store)
     await coordinator.async_config_entry_first_refresh()
     entry.runtime_data = coordinator
+    coordinator.start_rate_history()
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     entry.async_on_unload(entry.add_update_listener(_async_reload))
     await _async_update_panel(hass, loading=entry.entry_id)
@@ -506,3 +508,20 @@ async def ws_restore(hass: HomeAssistant, connection: websocket_api.ActiveConnec
         return
     _LOGGER.info("ovcirrus: restored backup into %s: %s", entry.title, result["summary"])
     connection.send_result(msg["id"], result)
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "ovcirrus/rates",
+        vol.Required("entry_id"): str,
+        vol.Optional("range", default="2h"): vol.In(["30m", "2h", "24h"]),
+    }
+)
+@callback
+def ws_rates(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict) -> None:
+    """Traffic history of the UniFi gateway ports (bytes/s) for the bandwidth graphs."""
+    coordinator = _coordinator(hass, msg["entry_id"])
+    if not coordinator:
+        connection.send_error(msg["id"], "not_found", "Unknown entry")
+        return
+    connection.send_result(msg["id"], {**coordinator.rates.series(msg["range"]), "step": 15, "enabled": bool(coordinator.unifi)})
