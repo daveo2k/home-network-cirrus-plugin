@@ -396,6 +396,7 @@ def ws_remove_device(hass: HomeAssistant, connection: websocket_api.ActiveConnec
     {
         vol.Required("type"): "ovcirrus/save_view",
         vol.Required("entry_id"): str,
+        vol.Optional("text"): vol.Any(None, vol.All(vol.Coerce(int), vol.Range(min=8, max=40))),
         vol.Optional("font"): vol.Any(None, vol.All(vol.Coerce(float), vol.Range(min=0.5, max=3))),
         vol.Optional("client"): vol.Any(None, vol.All(vol.Coerce(float), vol.Range(min=0.5, max=3))),
         vol.Optional("device"): vol.Any(None, vol.All(vol.Coerce(float), vol.Range(min=0.5, max=4))),
@@ -403,12 +404,12 @@ def ws_remove_device(hass: HomeAssistant, connection: websocket_api.ActiveConnec
 )
 @callback
 def ws_save_view(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict) -> None:
-    """Save text / client / device sizes as the default for every browser (None clears)."""
+    """Save text (px) / client / device sizes as the default for every browser (None clears)."""
     coordinator = _coordinator(hass, msg["entry_id"])
     if not coordinator:
         connection.send_error(msg["id"], "not_found", "Unknown entry")
         return
-    coordinator.store.view = {k: msg[k] for k in ("font", "client", "device") if msg.get(k) is not None}
+    coordinator.store.view = {k: msg[k] for k in ("text", "font", "client", "device") if msg.get(k) is not None}
     coordinator.store.schedule_save()
     connection.send_result(msg["id"], {"view": coordinator.store.view})
 

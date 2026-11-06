@@ -63,7 +63,7 @@ height: 640               # px
 refresh: 30               # seconds
 expand_clients: false     # start with AP client lists expanded
 max_columns: 3            # client chips per row inside an SSID box
-font_scale: 1             # map text size multiplier (0.7-1.8); viewers can also use A− / A+
+text_size: 16             # px size of device names (10-26); other map labels scale with it; viewers can change it in the View menu
 layout_editing: admin     # who can drag devices and save the layout: admin (default), true or false
 snap_to_grid: true        # snap dragged devices to a grid (viewers can toggle it in edit mode)
 grid_size: 20             # grid spacing in px

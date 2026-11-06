@@ -3,7 +3,8 @@
  * type: custom:ovcirrus-network-map
  * Options: entry_id, site (id or name), refresh (s, default 30), expand_clients (bool),
  *          max_columns (default 3), height (px, default 640), title,
- *          font_scale (map text size multiplier, default 1; viewers can change it with A− / A+),
+ *          text_size (px size of device names on the map, default 16; other map labels scale with it;
+ *                     viewers can change it in the View menu; the old font_scale multiplier still works),
  *          layout_editing ("admin" default, true, or false: who may drag devices and save the layout),
  *          snap_to_grid (default true), grid_size (px, default 20),
  *          height: "fill" makes the map fill its container (used by the sidebar panel),
@@ -22,8 +23,16 @@ let LABEL_H = BASE.LABEL_H; // title row inside the box: PAD above the title, th
 const V_GAP = 64;
 const TRUNK = 28;
 let LABEL_ROW = BASE.LABEL_ROW; // height of one link label row inside a group box
-let FS = 1; // text size multiplier for the map
-const FS_MIN = 0.7, FS_MAX = 1.8, FS_KEY = "ovcirrus-font-scale";
+let FS = 1; // text size multiplier for the map (text size / NAME_PX)
+// The map text size is set as the px size of device names; every other map label keeps its proportion.
+const NAME_PX = 13; // .name font-size in the CSS below, i.e. the size at FS = 1
+const TEXT_DEFAULT = 16, TEXT_MIN = 10, TEXT_MAX = 26, TEXT_KEY = "ovcirrus-text-size";
+const FS_KEY = "ovcirrus-font-scale"; // legacy multiplier, read once and converted
+const clampText = (v) => Math.round(Math.min(TEXT_MAX, Math.max(TEXT_MIN, Number(v) || TEXT_DEFAULT)));
+// Old saved multipliers were relative to the default size, so 1.0 maps onto the new default.
+const legacyText = (m) => (Number(m) ? clampText(Number(m) * TEXT_DEFAULT) : null);
+const configText = (cfg) => (Number(cfg?.text_size) ? clampText(cfg.text_size) : legacyText(cfg?.font_scale) || TEXT_DEFAULT);
+const viewText = (view) => (Number(view?.text) ? clampText(view.text) : legacyText(view?.font));
 function applyFontScale(fs) {
   FS = fs;
   const up = Math.max(1, fs);
@@ -243,7 +252,7 @@ class OvCirrusNetworkMap extends HTMLElement {
 
   setConfig(config) {
     this._config = {
-      refresh: 30, max_columns: 3, height: 640, expand_clients: false, font_scale: 1,
+      refresh: 30, max_columns: 3, height: 640, expand_clients: false,
       layout_editing: "admin", snap_to_grid: true, grid_size: 20, device_scale: 2, ...config,
     };
     let snap = null;
@@ -272,11 +281,11 @@ class OvCirrusNetworkMap extends HTMLElement {
     this._applyFill();
     let stored = null;
     try {
-      stored = Number(localStorage.getItem(FS_KEY)) || null;
+      stored = Number(localStorage.getItem(TEXT_KEY)) ? clampText(localStorage.getItem(TEXT_KEY)) : legacyText(localStorage.getItem(FS_KEY));
     } catch (e) {
       stored = null; // storage blocked: fall back to the card setting
     }
-    this._fs = Math.min(FS_MAX, Math.max(FS_MIN, stored || Number(this._config.font_scale) || 1));
+    this._tp = stored || configText(this._config);
     this._local = { ...(this._local || {}), font: !!stored };
   }
 
@@ -655,7 +664,7 @@ class OvCirrusNetworkMap extends HTMLElement {
     let H = 0;
     if (site) {
       const root = site.root;
-      applyFontScale(this._fs || 1);
+      applyFontScale((this._tp || TEXT_DEFAULT) / NAME_PX);
       VLAN_NAMES = Object.fromEntries(Object.entries(site.vlans || {}).map(([k, v]) => [k, v.name]));
       VLAN_COLORS = Object.fromEntries(Object.keys(site.vlans || {}).map((k, i) => [k, VLAN_PALETTE[i % VLAN_PALETTE.length]]));
       if (this._vlan != null && !(String(this._vlan) in (site.vlans || {}))) this._vlan = null;
@@ -784,7 +793,7 @@ class OvCirrusNetworkMap extends HTMLElement {
       this._fitZoom = zoom;
       this._lastZoom = zoom;
       body = `<div class="sizer" style="width:${W * zoom}px;height:${H * zoom}px">
-          <div class="canvas${this._editLayout && this._snap ? " grid" : ""}" style="width:${W}px;height:${H}px;transform:scale(${zoom});--fs:${this._fs || 1};--grid:${this._grid}px">
+          <div class="canvas${this._editLayout && this._snap ? " grid" : ""}" style="width:${W}px;height:${H}px;transform:scale(${zoom});--fs:${((this._tp || TEXT_DEFAULT) / NAME_PX).toFixed(4)};--grid:${this._grid}px">
             ${groups}<svg width="${W}" height="${H}">${edges}</svg>
             ${labels.map((l) => `<div class="elabel${l.dim ? " dim" : ""}${l.open ? " open" : ""}" data-gid="${esc(l.gid || "")}" style="left:${l.x}px;top:${l.y}px">${l.html}</div>`).join("")}${nodes}
           </div></div>`;
@@ -1008,7 +1017,7 @@ class OvCirrusNetworkMap extends HTMLElement {
   _applyServerView(view) {
     this._serverView = view || {};
     const clamp = (v, lo, hi, d) => Math.min(hi, Math.max(lo, Number(v) || d));
-    if (!this._local?.font && view.font) this._fs = clamp(view.font, FS_MIN, FS_MAX, 1);
+    if (!this._local?.font && viewText(view)) this._tp = viewText(view);
     if (!this._local?.client && view.client) this._cs = clamp(view.client, CS_MIN, CS_MAX, 1);
     if (!this._local?.device && view.device) this._ds = clamp(view.device, DS_MIN, DS_MAX, 2);
   }
@@ -1017,15 +1026,15 @@ class OvCirrusNetworkMap extends HTMLElement {
     const row = (label, key, value, hint) => `<div class="vrow"><span class="vlab">${label}<small>${hint}</small></span>
       <span class="vctl"><button data-${key}="-" aria-label="Smaller ${label.toLowerCase()}">−</button><b>${value}</b><button data-${key}="+" aria-label="Larger ${label.toLowerCase()}">+</button></span></div>`;
     const sv = this._serverView || {};
-    const saved = sv.font || sv.client || sv.device;
+    const saved = sv.text || sv.font || sv.client || sv.device;
     return `<div class="viewmenu" role="dialog" aria-label="Map view">
-      ${row("Text", "font", `${Math.round((this._fs || 1) * 100)}%`, "names and labels on the map")}
+      ${row("Text", "font", `${this._tp || TEXT_DEFAULT}px`, "size of device names; other map labels follow")}
       ${row("Clients", "csize", `${this._cs || 1}×`, "wireless and wired clients")}
       ${row("Devices", "dsize", `${this._ds || 2}×`, "switches, APs, gateway, client counts")}
       <div class="vfoot">
         ${this._isAdmin ? `<button class="act" data-viewsave title="Every browser and device starts with these sizes">Save as default for all devices</button>` : ""}
         <button class="act ghost" data-viewreset>${saved ? "Use saved default" : "Reset"}</button>
-        <div class="muted">${this._viewSaved ? "Saved as the default for all devices." : "Changes are remembered in this browser."}${saved ? ` Saved default: text ${Math.round((sv.font || 1) * 100)}%, clients ${sv.client || 1}×, devices ${sv.device || 2}×.` : ""}</div>
+        <div class="muted">${this._viewSaved ? "Saved as the default for all devices." : "Changes are remembered in this browser."}${saved ? ` Saved default: text ${viewText(sv) || TEXT_DEFAULT}px, clients ${sv.client || 1}×, devices ${sv.device || 2}×.` : ""}</div>
       </div></div>`;
   }
 
@@ -1326,14 +1335,14 @@ class OvCirrusNetworkMap extends HTMLElement {
     }
     const forgetLocal = () => {
       try {
-        [FS_KEY, CS_KEY, DS_KEY].forEach((k) => localStorage.removeItem(k));
+        [TEXT_KEY, FS_KEY, CS_KEY, DS_KEY].forEach((k) => localStorage.removeItem(k));
       } catch (e) {
         // storage blocked: nothing stored to forget
       }
       this._local = { font: false, client: false, device: false };
     };
     root.querySelector("[data-viewsave]")?.addEventListener("click", async () => {
-      const view = { font: this._fs || 1, client: this._cs || 1, device: this._ds || 2 };
+      const view = { text: this._tp || TEXT_DEFAULT, client: this._cs || 1, device: this._ds || 2 };
       try {
         await this._hass.callWS({ type: "ovcirrus/save_view", entry_id: entryId, ...view });
         forgetLocal(); // this browser now follows the saved default too
@@ -1348,7 +1357,7 @@ class OvCirrusNetworkMap extends HTMLElement {
       forgetLocal();
       const sv = this._serverView || {};
       const cfg = this._config;
-      this._fs = Math.min(FS_MAX, Math.max(FS_MIN, sv.font || Number(cfg.font_scale) || 1));
+      this._tp = viewText(sv) || configText(cfg);
       this._cs = Math.min(CS_MAX, Math.max(CS_MIN, sv.client || Number(cfg.client_scale) || 1));
       this._ds = Math.min(DS_MAX, Math.max(DS_MIN, sv.device || Number(cfg.device_scale) || 2));
       this._viewSaved = false;
@@ -1384,12 +1393,13 @@ class OvCirrusNetworkMap extends HTMLElement {
     );
     root.querySelectorAll("[data-font]").forEach((b) =>
       b.addEventListener("click", () => {
-        const step = b.dataset.font === "+" ? 0.1 : -0.1;
-        this._fs = Math.round(Math.min(FS_MAX, Math.max(FS_MIN, (this._fs || 1) + step)) * 10) / 10;
+        const step = b.dataset.font === "+" ? 1 : -1;
+        this._tp = clampText((this._tp || TEXT_DEFAULT) + step);
         this._local = { ...this._local, font: true };
         this._viewSaved = false;
         try {
-          localStorage.setItem(FS_KEY, String(this._fs));
+          localStorage.setItem(TEXT_KEY, String(this._tp));
+          localStorage.removeItem(FS_KEY);
         } catch (e) {
           // storage blocked: the size still applies until the page reloads
         }
