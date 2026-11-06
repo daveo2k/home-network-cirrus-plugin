@@ -12,7 +12,7 @@
  *          client_size (size of wireless and wired clients, default 1); viewers can change both.
  *          1x is 3.75 times the original ring size; the old device_scale / client_scale still work.
  */
-const CARD_VERSION = "0.2.13"; // kept in step with manifest.json by scripts/release.sh
+const CARD_VERSION = "0.2.14"; // kept in step with manifest.json by scripts/release.sh
 const CHIP_W = 210; // minimum device box width
 const MAX_CHIP_W = 380; // boxes grow to fit their text up to this (times the text size), then ellipsis
 const BASE = { CHIP_H: 54, LABEL_H: 24, LABEL_ROW: 19 };
